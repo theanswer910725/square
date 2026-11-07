@@ -1,0 +1,21 @@
+# 运行日志
+debug.log
+
+# Python 产物
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+
+# 虚拟环境
+.venv/
+venv/
+env/
+
+# 生成的临时图片
+*.png
+
+# 编辑器
+.idea/
+.vscode/
