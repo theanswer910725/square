@@ -15,6 +15,32 @@ def virtual_screen():
             u.GetSystemMetrics(78), u.GetSystemMetrics(79))
 
 
+def monitor_at_cursor():
+    """鼠标所在显示器的物理矩形 (x, y, w, h)，取不到时退回主显示器"""
+    u = ctypes.windll.user32
+
+    class POINT(ctypes.Structure):
+        _fields_ = [("x", ctypes.c_long), ("y", ctypes.c_long)]
+
+    class RECT(ctypes.Structure):
+        _fields_ = [("left", ctypes.c_long), ("top", ctypes.c_long),
+                    ("right", ctypes.c_long), ("bottom", ctypes.c_long)]
+
+    class MONITORINFO(ctypes.Structure):
+        _fields_ = [("cbSize", ctypes.c_ulong), ("rcMonitor", RECT),
+                    ("rcWork", RECT), ("dwFlags", ctypes.c_ulong)]
+
+    pt = POINT()
+    u.GetCursorPos(ctypes.byref(pt))
+    hmon = u.MonitorFromPoint(pt, 2)          # MONITOR_DEFAULTTONEAREST
+    info = MONITORINFO()
+    info.cbSize = ctypes.sizeof(MONITORINFO)
+    if not u.GetMonitorInfoW(hmon, ctypes.byref(info)):
+        return (0, 0, u.GetSystemMetrics(0), u.GetSystemMetrics(1))
+    r = info.rcMonitor
+    return (r.left, r.top, r.right - r.left, r.bottom - r.top)
+
+
 def tk_to_phys_scale(root):
     """Tk 坐标 → 屏幕物理像素的换算系数（DPI 感知下通常为 1）"""
     sw = root.winfo_screenwidth()
@@ -25,19 +51,12 @@ def tk_to_phys_scale(root):
     return 1.0 if abs(k - 1.0) < 0.02 else k
 
 
-def restore_owner(owner):
-    """恢复框选期间临时隐藏的大图弹窗，并保持它在主窗口之上"""
-    if owner is None or not owner.winfo_exists():
-        return
-    owner.deiconify()
-    owner.lift()
-
-
 def capture_region(app, owner=None):
     """区域截图：全屏遮罩拖拽框选 → 进剪贴板 → 解码器还原
 
-    owner: 触发截图的大图预览弹窗。框选/抓屏期间临时隐藏，
-    结束后恢复——既不让它挡住所框区域，也不让它被截进图里。
+    owner: 触发截图的大图预览弹窗，只用来给提示框定父窗口。
+    框选期间弹窗保持显示不隐藏——用户要截的正是它显示的大图；
+    遮罩半透明覆盖其上，遮罩销毁后 150ms 再抓屏，抓到的就是未变暗的画面。
     """
     vx, vy, vw, vh = virtual_screen()
     if vw <= 0 or vh <= 0:
@@ -45,9 +64,6 @@ def capture_region(app, owner=None):
                              parent=owner or app.root)
         return
     k = tk_to_phys_scale(app.root)
-
-    if owner is not None:
-        owner.withdraw()
 
     top = tk.Toplevel(app.root)
     top.overrideredirect(True)
@@ -59,9 +75,19 @@ def capture_region(app, owner=None):
     cv = tk.Canvas(top, bg="#000000", highlightthickness=0,
                    cursor="crosshair")
     cv.pack(fill="both", expand=True)
-    cv.create_text(int(vw / k) // 2, 28,
-                   text="拖拽框选二维码区域 · Esc / 右键取消",
-                   fill="#ffffff", font=("Microsoft YaHei UI", 14))
+
+    # 遮罩按虚拟桌面铺满所有显示器；提示文字要居中在「鼠标所在显示器」上。
+    # 若按虚拟桌面宽度居中，多屏时文字会正好压在屏幕接缝处，看起来被裁掉。
+    mx, my, mw, mh = monitor_at_cursor()
+    hint = cv.create_text(0, 28, text="拖拽框选二维码区域 · Esc / 右键取消",
+                          fill="#ffffff", font=("Microsoft YaHei UI", 14))
+    bx1, _, bx2, _ = cv.bbox(hint)
+    half = (bx2 - bx1) // 2
+    left = (mx - vx) / k
+    right = left + mw / k
+    # 再夹一次，保证整行文字都落在这块显示器内、左右各留 20px
+    cx = min(max(left + (right - left) / 2, left + half + 20), right - half - 20)
+    cv.coords(hint, cx, 28)
 
     state = {"sx": None, "sy": None, "closed": False}
 
@@ -90,7 +116,6 @@ def capture_region(app, owner=None):
             return
         state["closed"] = True
         top.destroy()          # 遮罩销毁，绑定随控件一起释放，不留监听
-        restore_owner(owner)
         app.status.set("已取消截图")
 
     def on_release(e):
@@ -106,7 +131,6 @@ def capture_region(app, owner=None):
         py2 = int(round(vy + y2 * k))
         top.destroy()
         if px2 - px1 < 24 or py2 - py1 < 24:
-            restore_owner(owner)
             messagebox.showinfo("提示", "框选区域太小，请重新框选",
                                 parent=owner or app.root)
             return
@@ -128,12 +152,9 @@ def finish_region(app, px1, py1, px2, py2, owner=None):
     try:
         full = ImageGrab.grab(all_screens=True)
     except Exception as e:
-        restore_owner(owner)
         messagebox.showerror("错误", f"截图失败: {e}",
                              parent=owner or app.root)
         return
-    # 像素已经抓完，这时才把弹窗放回来，保证它没被截进图里
-    restore_owner(owner)
     # all_screens 的图左上角对应虚拟屏原点 (vx, vy)
     img = full.crop((px1 - vx, py1 - vy, px2 - vx, py2 - vy))
 
