@@ -345,8 +345,8 @@ class SquareApp:
         page.grid_rowconfigure(3, weight=2)
 
         # 状态行：左侧检测状态，右侧依次是「清空收集」（仅未收齐时出现）、
-        # 「选择图片」「剪贴板」，全部垂直居中；右侧小按钮与「复制」同款。
-        # 截图链路不在这里：主界面预览卡右上角与大图弹窗仍走 _on_capture_region
+        # 「截图识别」「选择图片」「剪贴板」，全部垂直居中；除截图识别用主按钮色，
+        # 其余小按钮与「复制」同款
         srow = ctk.CTkFrame(page, fg_color="transparent")
         srow.grid(row=0, column=0, sticky="ew", padx=12, pady=(10, 4))
         srow.grid_columnconfigure(0, weight=1)
@@ -358,24 +358,28 @@ class SquareApp:
         # 只在「分片没收齐」时才出现，平时不占地方
         self.btn_clear_pool = ctk.CTkButton(
             srow, text="清空收集", command=self._clear_pool_ui,
-            font=self.f_xs, width=64, height=22, corner_radius=RADIUS,
+            font=self.f_xs, width=64, height=24, corner_radius=RADIUS,
             fg_color=BTN, hover_color=BTN_HOVER, text_color=TEXT,
             border_width=1, border_color=BORDER)
         self.btn_clear_pool.grid(row=0, column=1, padx=(6, 4))
         self.btn_clear_pool.grid_remove()
-        # 两颗按钮取较宽者的宽度，右缘贴齐状态行右侧
-        entries = [("选择图片", self._on_scan_file),
-                   ("剪贴板", self._on_scan_clipboard)]
-        btn_w = max(self.f_sm.measure(t) for t, _ in entries) + 26
+        # 三颗按钮取较宽者的宽度，右缘贴齐状态行右侧；
+        # 截图识别复用主界面预览区与大图弹窗的同一条截图入口
+        entries = [("截图识别", self._on_capture_region, True),
+                   ("选择图片", self._on_scan_file, False),
+                   ("剪贴板", self._on_scan_clipboard, False)]
+        btn_w = max(self.f_sm.measure(t) for t, _, _ in entries) + 26
         self._status_btns = [self.btn_clear_pool]
-        for col, (text, cmd) in enumerate(entries, start=2):
-            btn = ctk.CTkButton(srow, text=text, command=cmd, width=btn_w,
-                                height=24, corner_radius=RADIUS, font=self.f_sm,
-                                fg_color=BTN, hover_color=BTN_HOVER,
-                                text_color=TEXT, border_width=1,
-                                border_color=BORDER)
-            btn.grid(row=0, column=col,
-                     padx=(0, 4) if col == 2 else 0)
+        for col, (text, cmd, primary) in enumerate(entries, start=2):
+            btn = ctk.CTkButton(
+                srow, text=text, command=cmd, width=btn_w, height=24,
+                corner_radius=RADIUS, font=self.f_sm,
+                fg_color=ACCENT if primary else BTN,
+                hover_color=ACCENT_HOVER if primary else BTN_HOVER,
+                text_color=ON_ACCENT if primary else TEXT,
+                border_width=0 if primary else 1,
+                border_color=BORDER)
+            btn.grid(row=0, column=col, padx=(0, 4) if col <= 3 else 0)
             self._status_btns.append(btn)
 
         self.scan_canvas = tk.Canvas(page, bg=SURFACE, height=120, bd=0,

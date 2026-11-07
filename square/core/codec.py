@@ -47,7 +47,9 @@ def effective_part_limit(max_b64_len, error="L"):
 def fits_single(text, error="L"):
     """按内容实际形态（数字/字母/字节模式）判断能否塞进一个码"""
     try:
-        segno.make(text, error=error)
+        # 一律生成标准 QR：Micro QR 不被 pyzbar / zbar 识别，
+        # 通用扫码器同样读不出，会把短内容的可用性直接毁掉
+        segno.make(text, error=error, micro=False)
         return True
     except segno.encoder.DataOverflowError:
         return False
@@ -65,7 +67,7 @@ def encode(text, compressed=False, max_b64_len=1600, error="L",
 
     if single_only:
         try:
-            qr = segno.make(text, error=error)
+            qr = segno.make(text, error=error, micro=False)
         except segno.encoder.DataOverflowError:
             raise SingleOverflow(info["original_bytes"],
                                  single_capacity(error), error) from None
@@ -75,7 +77,7 @@ def encode(text, compressed=False, max_b64_len=1600, error="L",
     # 纯文本单码：整段直接编，不加帧头；分片策略会跳过这一步
     if prefer_single and not compressed:
         try:
-            qr = segno.make(text, error=error)
+            qr = segno.make(text, error=error, micro=False)
             return {"strategy": "single-plain", "qrs": [qr], "total_parts": 1,
                     "compressed": False, "frames_used": 0, **info}
         except segno.encoder.DataOverflowError:
@@ -94,7 +96,7 @@ def encode(text, compressed=False, max_b64_len=1600, error="L",
         chunk = full_b64[i * data_per_part : (i + 1) * data_per_part]
         parts.append(_b64e(bin_hdr) + chunk)
 
-    qrs = [segno.make(p, error=error) for p in parts]
+    qrs = [segno.make(p, error=error, micro=False) for p in parts]
     return {"qrs": qrs, "payloads": parts, "compressed": compressed,
             "total_parts": total, "strategy": "compressed-split" if compressed else "plain-split",
             "frames_used": total, "part_limit": limit, **info}
