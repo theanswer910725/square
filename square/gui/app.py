@@ -8,8 +8,10 @@ from tkinter import filedialog, messagebox
 import customtkinter as ctk
 from PIL import Image, ImageGrab, ImageTk
 
-from ..core.codec import (assemble_frames, decode_strings, encode,
-                          format_indices, parse_frames)
+from ..core.codec import (assemble_frames, decode_strings,
+                          effective_part_limit, encode, fits_single,
+                          parse_frames, part_capacity_chars,
+                          single_capacity)
 from ..core.puzzle import make_puzzle
 from ..core.tiles import as_text, decode_tiles
 from .capture import capture_region
@@ -22,12 +24,15 @@ from .widgets import (SelectBox, Tooltip, fix_textbox_selection,
                       make_scan_icon, pick_font_family, set_window_icon)
 
 # ---- 下拉预设（文案即键，变量初值必须取自这里，保证显示值与实际生效值一致）----
-ERROR_OPTIONS = [
-    "L · 最低（容量最大，约 7% 可恢复）",
-    "M · 中等（约 15% 可恢复）",
-    "Q · 较高（约 25% 可恢复）",
-    "H · 最高（容量最小，约 30% 可恢复）",
-]
+# 纠错率：整串文案 → segno 参数。显示值与实际值只在这里对应一次，取值一律查表，
+# 不截取/解析标签文字，界面文案怎么改都不会走错档
+ERROR_PARAM = {
+    "最低（容量最大，约 7% 可恢复）": "L",
+    "中等（约 15% 可恢复）": "M",
+    "较高（约 25% 可恢复）": "Q",
+    "最高（容量最小，约 30% 可恢复）": "H",
+}
+ERROR_OPTIONS = list(ERROR_PARAM)
 QUALITY_OPTIONS = [
     "紧凑（分片少，码密）",
     "平衡",
@@ -36,7 +41,9 @@ QUALITY_OPTIONS = [
 ]
 STRATEGY_OPTIONS = ["自动（推荐）", "强制单码", "强制分片", "压缩+分片"]
 
-# 清晰度 → 每片 base64 载荷上限（字符）。上限越大分片越少、单码模块越密
+# 清晰度 → 每片 base64 载荷上限（字符）。上限越大分片越少、单码模块越密。
+# 实际生效值还要与「当前纠错率的单码容量 - 20 字符帧头」取较小者，
+# 避免上限超过单码容量时抛 DataOverflowError
 QUALITY_PART_LIMIT = {
     "紧凑（分片少，码密）": 1700,
     "平衡": 1300,
@@ -44,12 +51,59 @@ QUALITY_PART_LIMIT = {
     "最清晰（分片最多，单码最疏）": 750,
 }
 
-# 纠错率 M：通用推荐档，截图/翻拍的摩尔纹与缩放模糊靠 15% 冗余兜底；
+# 纠错率默认「中等」（M）：通用推荐档，截图/翻拍的摩尔纹与缩放模糊靠 15% 冗余兜底；
 # 容量损失由分片吸收（分片上限不变，只是每片版本略高）
-DEFAULT_ERROR = "M · 中等（约 15% 可恢复）"
+DEFAULT_ERROR = "中等（约 15% 可恢复）"
 # 清晰度：1000 字符/片，与旧版实际生效值一致；M 纠错下满片约 version 26
 DEFAULT_QUALITY = "清晰（分片多，码易识别）"
 DEFAULT_STRATEGY = "自动（推荐）"
+
+
+def format_bytes(n):
+    """字节数 → 人类可读：不足 1KB 用「字节」，否则按 1024 进位 KB / MB"""
+    if n < 1024:
+        return f"{n} 字节"
+    v, unit = n / 1024, "KB"
+    if v >= 1024:
+        v, unit = v / 1024, "MB"
+    s = f"{v:.1f}"
+    if s.endswith(".0"):
+        s = s[:-2]
+    return f"{s} {unit}"
+
+
+def restore_status(text):
+    """还原成功状态行：字符数 + 人类可读的字节数"""
+    return (f"✓ 还原成功 · {len(text)} 字符 · "
+            f"{format_bytes(len(text.encode('utf-8')))}")
+
+
+def progress_text(total, have, missing, avail, measure):
+    """分片进度文本：片号空格分隔，放不下时在括号内以「 …」收尾
+
+    括号外的「共 N 片，已收集 M 片，缺失 K 片」始终完整保留，K 为真实缺失数。
+    """
+    miss_nums = sorted(n + 1 for n in set(missing))
+    miss_set = set(miss_nums)
+    coll_nums = [n for n in range(1, total + 1) if n not in miss_set]
+    k = len(miss_nums)
+
+    def build(cs, ms, c_cut, m_cut):
+        c = " ".join(str(n) for n in cs) + (" …" if c_cut else "")
+        m = " ".join(str(n) for n in ms) + (" …" if m_cut else "")
+        return f"共{total}片，已收集{have}片（{c}），缺失{k}片（{m}）"
+
+    cs, ms = list(coll_nums), list(miss_nums)
+    c_cut = m_cut = False
+    while measure(build(cs, ms, c_cut, m_cut)) > avail and (cs or ms):
+        # 优先截较长的列表；等长时先截缺失列表，保证「已收集」信息在前
+        if len(ms) >= len(cs):
+            ms.pop()
+            m_cut = True
+        else:
+            cs.pop()
+            c_cut = True
+    return build(cs, ms, c_cut, m_cut)
 
 
 class SquareApp:
@@ -221,6 +275,20 @@ class SquareApp:
         self.var_strategy = tk.StringVar(value=DEFAULT_STRATEGY)
         add_menu(2, self.var_strategy, STRATEGY_OPTIONS)
 
+        # 参数区常驻提示：档位被单码容量压低、压缩码只有本软件能还原。
+        # 用标签而不是弹窗，改下拉时即时更新，不打断操作
+        dpi = self.root.winfo_fpixels("1i") / 96.0
+        self.param_hint = ctk.CTkLabel(
+            params, text="", font=self.f_xs, text_color=MUTED,
+            anchor="w", justify="left", wraplength=int(380 * dpi))
+        self.param_hint.grid(row=3, column=0, columnspan=2, sticky="ew",
+                             pady=(4, 0))
+        self.param_hint.grid_remove()
+        for var in (self.var_error_label, self.var_quality,
+                    self.var_strategy):
+            var.trace_add("write", lambda *a: self._update_param_hint())
+        self._update_param_hint()
+
         # ---- 主操作 ----
         btns = ctk.CTkFrame(left, fg_color="transparent")
         btns.grid(row=3, column=0, sticky="ew", padx=12, pady=(8, 12))
@@ -255,11 +323,6 @@ class SquareApp:
                       font=self.f_sm, width=52, height=24, corner_radius=RADIUS,
                       fg_color=BTN, hover_color=BTN_HOVER, text_color=TEXT,
                       border_width=1, border_color=BORDER).pack(side="right")
-        ctk.CTkButton(head2, text="测试", command=self._insert_long_demo,
-                      font=self.f_sm, width=52, height=24, corner_radius=RADIUS,
-                      fg_color=BTN, hover_color=BTN_HOVER, text_color=TEXT,
-                      border_width=1, border_color=BORDER).pack(
-            side="right", padx=(0, 4))
 
         self.text_input = ctk.CTkTextbox(
             right, font=self.f_ui, wrap="word",
@@ -288,9 +351,10 @@ class SquareApp:
         srow.grid(row=0, column=0, sticky="ew", padx=12, pady=(10, 4))
         srow.grid_columnconfigure(0, weight=1)
         self.scan_status = tk.StringVar(value="等待输入图片…")
-        ctk.CTkLabel(srow, textvariable=self.scan_status, font=self.f_sm,
-                     text_color=MUTED, anchor="w").grid(
-            row=0, column=0, sticky="ew")
+        self.scan_status_label = ctk.CTkLabel(
+            srow, textvariable=self.scan_status, font=self.f_sm,
+            text_color=MUTED, anchor="w")
+        self.scan_status_label.grid(row=0, column=0, sticky="ew")
         # 只在「分片没收齐」时才出现，平时不占地方
         self.btn_clear_pool = ctk.CTkButton(
             srow, text="清空收集", command=self._clear_pool_ui,
@@ -303,13 +367,16 @@ class SquareApp:
         entries = [("选择图片", self._on_scan_file),
                    ("剪贴板", self._on_scan_clipboard)]
         btn_w = max(self.f_sm.measure(t) for t, _ in entries) + 26
+        self._status_btns = [self.btn_clear_pool]
         for col, (text, cmd) in enumerate(entries, start=2):
-            ctk.CTkButton(srow, text=text, command=cmd, width=btn_w,
-                          height=24, corner_radius=RADIUS, font=self.f_sm,
-                          fg_color=BTN, hover_color=BTN_HOVER,
-                          text_color=TEXT, border_width=1,
-                          border_color=BORDER).grid(
-                row=0, column=col, padx=(0, 4) if col == 2 else 0)
+            btn = ctk.CTkButton(srow, text=text, command=cmd, width=btn_w,
+                                height=24, corner_radius=RADIUS, font=self.f_sm,
+                                fg_color=BTN, hover_color=BTN_HOVER,
+                                text_color=TEXT, border_width=1,
+                                border_color=BORDER)
+            btn.grid(row=0, column=col,
+                     padx=(0, 4) if col == 2 else 0)
+            self._status_btns.append(btn)
 
         self.scan_canvas = tk.Canvas(page, bg=SURFACE, height=120, bd=0,
                                      highlightthickness=1,
@@ -337,11 +404,6 @@ class SquareApp:
         fix_textbox_selection(self.scan_text)
 
     # ========== 生成器动作 ==========
-    def _insert_long_demo(self):
-        demo = ("这是一段用来测试超长文本编码能力的示例段落。" * 200)
-        self.text_input.delete("1.0", "end")
-        self.text_input.insert("1.0", demo)
-
     def _import_file(self):
         path = filedialog.askopenfilename(
             filetypes=[("文本文件", "*.txt"), ("所有文件", "*.*")])
@@ -349,6 +411,27 @@ class SquareApp:
             with open(path, "r", encoding="utf-8") as f:
                 self.text_input.delete("1.0", "end")
                 self.text_input.insert("1.0", f.read())
+
+    def _update_param_hint(self):
+        """参数区提示：档位被容量压低、压缩码的兼容性说明（改下拉即时刷新）"""
+        error_label = self.var_error_label.get()
+        error = ERROR_PARAM[error_label]
+        tier = QUALITY_PART_LIMIT[self.var_quality.get()]
+        limit = effective_part_limit(tier, error)
+        lines = []
+        if limit < tier:
+            lines.append(
+                f"当前纠错率「{error_label}」下单码最多 "
+                f"{part_capacity_chars(error)} 字符/片，"
+                f"每片上限已由 {tier} 降为 {limit}")
+        if self.var_strategy.get() == STRATEGY_OPTIONS[3]:
+            lines.append("压缩码仅可本软件还原，通用扫码工具读取到的内容为编码字符串非原始文本。")
+        text = "\n".join(lines)
+        if text:
+            self.param_hint.configure(text=text)
+            self.param_hint.grid()
+        else:
+            self.param_hint.grid_remove()
 
     def _on_generate(self):
         if self._busy:
@@ -363,43 +446,42 @@ class SquareApp:
         strategy = {"自动（推荐）": "auto", "强制单码": "single",
                     "强制分片": "split", "压缩+分片": "compress"}.get(
             self.var_strategy.get(), "auto")
-        error = self.var_error_label.get()[:1]  # 从 "M · ..." 里取首字母
+        error = ERROR_PARAM[self.var_error_label.get()]
 
-        # 根据策略决定是否压缩
-        compressed = False
-        if strategy == "compress":
-            compressed = True
-        elif strategy == "auto":
-            # auto：先试单片→再无压缩分片→再压缩分片
-            compressed = False  # 简化：auto 先走无压缩，放不下再提示
-        elif strategy == "single":
-            # 强制单码：放不下就报错
-            if orig_len > 2700:
-                messagebox.showerror("错误",
-                    f"文本 {orig_len} 字节超过单二维码容量（~2700 bytes）\n"
-                    f"请改用其他策略", parent=self.root)
-                return
-            compressed = False
-        elif strategy == "split":
-            compressed = False
+        # 强制单码：按纠错率下的真实单码容量判断，而不是拍一个固定字节阈值
+        if strategy == "single" and not fits_single(text, error):
+            cap = single_capacity(error)
+            over = max(0, orig_len - cap)
+            messagebox.showerror(
+                "超出单码容量",
+                f"当前纠错率「{self.var_error_label.get()}」下，"
+                f"单码最多 {cap} 字节；\n"
+                f"当前内容 {orig_len} 字节，超出 {over} 字节。\n\n"
+                "可以：降低纠错率（「最低」容量最大）、缩短文本，"
+                "或改用「自动 / 强制分片」。",
+                parent=self.root)
+            return
 
-        # 清晰度 → 每片 payload 上限。直接以完整文案为键，不截断文案再兜底，
-        # 避免"显示某档、实际按另一档生成"
-        max_b64_len = QUALITY_PART_LIMIT[self.var_quality.get()]
+        # 每片上限 = min(清晰度档位上限, 当前纠错率下单码容量 - 20 字符帧头)
+        max_b64_len = effective_part_limit(
+            QUALITY_PART_LIMIT[self.var_quality.get()], error)
 
         # 编码放到后台线程，主线程保持响应（进度条才能动）
         self._set_busy(True)
         threading.Thread(
             target=self._generate_worker,
-            args=(text, compressed, error, max_b64_len),
+            args=(text, strategy, error, max_b64_len),
             daemon=True).start()
         self.root.after(50, self._poll_generate)
 
-    def _generate_worker(self, text, compressed, error, max_b64_len):
+    def _generate_worker(self, text, strategy, error, max_b64_len):
         """后台线程：编码 + 拼图都做完，只回传结果和 PIL 图（不碰任何 Tk 控件）"""
         try:
-            result = encode(text, compressed=compressed, error=error,
-                            max_b64_len=max_b64_len)
+            result = encode(
+                text, error=error, max_b64_len=max_b64_len,
+                compressed=strategy == "compress",
+                prefer_single=strategy != "split",
+                single_only=strategy == "single")
             # 拼图在子线程构造没问题；ImageTk.PhotoImage 留给主线程
             result["preview_image"] = make_puzzle(
                 result["qrs"], cols=min(4, len(result["qrs"])), scale=8)
@@ -534,20 +616,50 @@ class SquareApp:
     def _clear_pool_ui(self):
         self._reset_pool()
         self.scan_text.delete("1.0", "end")
-        self.scan_status.set("已清空收集，可以重新选择图片")
+        self.scan_status.set("已清空收集分片，可重新选择图片")
+
+    @staticmethod
+    def _grid_pad(w):
+        """控件在 grid 里占用的左右外边距总和（padx 可能是元组或字符串）"""
+        pad = w.grid_info().get("padx", 0)
+        if isinstance(pad, (tuple, list)):
+            return sum(int(p) for p in pad)
+        return sum(int(p) for p in str(pad).split())
+
+    def _status_text_width(self):
+        """状态行左侧实际可用像素：整行宽减去右侧按钮及间距"""
+        used = 0
+        for w in self._status_btns:
+            if w.winfo_ismapped():
+                used += w.winfo_width() + self._grid_pad(w)
+        return max(140, self.scan_status_label.master.winfo_width()
+                   - used - 6)
+
+    def _textbox_text_width(self):
+        """还原文本框内真正可排文字的像素宽度（扣除边框与内边距）"""
+        inner = getattr(self.scan_text, "_textbox", None)
+        if inner is not None:
+            w = inner.winfo_width()
+        else:
+            w = self.scan_text.winfo_width() - 24
+        return max(200, w - 2)
 
     def _show_partial(self, have, total, missing, prefix=""):
-        miss = format_indices(missing)
+        self.btn_clear_pool.grid()
+        self.root.update_idletasks()
+        status_line = progress_text(total, have, missing,
+                                    self._status_text_width(), self.f_sm.measure)
+        text_line = progress_text(total, have, missing,
+                                  self._textbox_text_width(), self.f_ui.measure)
         if prefix:
             self.scan_text.insert("1.0", prefix + "\n\n")
         self.scan_text.insert("end",
-            f"分片二维码：共 {total} 片，已收集 {have} 片，缺第 {miss} 片。\n\n"
+            text_line + "\n\n"
             f"可以继续补充：再框选/选择一张含缺失分片的图，"
             f"已收集的片会按片号自动合并，凑齐后自动还原，不用再点一次。\n\n"
             f"更快的无损路径：生成器点「保存二维码」拿到原图，"
             f"再用「选择图片」按原始分辨率解码，一次就能全中。")
-        self.scan_status.set(f"⚠ 已收集 {have}/{total} · 缺 {miss}")
-        self.btn_clear_pool.grid()
+        self.scan_status.set(status_line)
 
     def _scan_image(self, pil_img):
         """对 PIL Image 执行多码检测 + 重组；分片按片号累计到收集池
@@ -616,8 +728,7 @@ class SquareApp:
         if status == "ok":
             text = result["text"]
             self.scan_text.insert("1.0", text)
-            self.scan_status.set(
-                f"✓ 还原成功 · {len(text)} 字符 · {len(text.encode('utf-8'))} bytes")
+            self.scan_status.set(restore_status(text))
             self._reset_pool()
             return "ok"
 
