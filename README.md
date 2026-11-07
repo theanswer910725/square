@@ -103,7 +103,7 @@ square/
     app.py              主窗口、生成器/解码器页面与各入口动作
     capture.py          区域截图遮罩、跨屏抓图与结果分发
     preview.py          大图预览弹窗（缩放、滚动条显隐）
-    theme.py            深色色板、圆角与字体栈常量
+    theme.py            Win11 浅色 Fluent 色板、下拉框/滚动条/遮罩配色、圆角与字体栈
     widgets.py          下拉框、悬停提示、图标绘制与字体挑选
     assets/             应用图标
 ```
