@@ -16,13 +16,13 @@ from .capture import capture_region
 from .preview import open_preview_popup
 from .theme import (ACCENT, ACCENT_HOVER, BG, BORDER, BTN, BTN_HOVER, CARD,
                     FIELD, MUTED, TEXT, TRACK)
-from .widgets import Tooltip, make_scan_icon
+from .widgets import Tooltip, make_scan_icon, set_window_icon
 
 
-class QRToolApp:
+class SquareApp:
     def __init__(self, root):
         self.root = root
-        root.title("QR Tool")
+        root.title("方寸 · Square")
 
         # 按系统 DPI 换算，保持观感一致（左右两栏：预览 + 整列文本输入）
         scale = root.winfo_fpixels("1i") / 96.0
@@ -681,6 +681,15 @@ def run():
     ctk.set_appearance_mode("light")
     ctk.set_default_color_theme("blue")
 
+    # 明确进程自己的 AppUserModelID：否则 Win11 任务栏按 pythonw.exe 归组，
+    # 按钮上会一直显示 python 默认图标，窗口图标设了也不生效
+    try:
+        ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID("square.app")
+    except Exception:
+        pass
+
     root = ctk.CTk()
-    QRToolApp(root)
+    # 在窗口首次显示前设图标，否则任务栏会缓存 python 默认图标
+    set_window_icon(root)
+    SquareApp(root)
     root.mainloop()

@@ -5,11 +5,13 @@ import customtkinter as ctk
 from PIL import Image, ImageTk
 
 from .theme import ACCENT, ACCENT_HOVER, BG, BORDER, BTN, BTN_HOVER, TEXT, TRACK
+from .widgets import set_window_icon
 
 
 def open_preview_popup(app):
     """弹出大图窗口，带缩放条"""
     win = ctk.CTkToplevel(app.root)
+    set_window_icon(win)
     win.title("二维码大图预览")
     # 设为 root 的从属窗口：Windows 上 owned window 始终压在父窗口之上
     win.transient(app.root)

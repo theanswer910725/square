@@ -1,7 +1,23 @@
-"""界面小部件：截图图标与悬停提示。"""
+"""界面小部件：截图图标、窗口图标与悬停提示。"""
 import tkinter as tk
+from pathlib import Path
 
 from PIL import Image, ImageDraw
+
+# CustomTkinter 官方仓库自带的 Windows 图标（256×256，含透明通道）
+ICON_ICO = Path(__file__).with_name("assets") / "CustomTkinter_icon_Windows.ico"
+
+
+def set_window_icon(win):
+    """设置窗口/任务栏图标。
+
+    必须在窗口首次显示之前调用：Windows 任务栏按钮会缓存窗口第一次映射时的
+    图标，窗口显示后再改通常不刷新，仍旧显示 python 默认图标。
+    """
+    try:
+        win.iconbitmap(str(ICON_ICO))
+    except Exception:
+        pass
 
 
 def make_scan_icon(size=16, scale=4, color="#1f2328"):
