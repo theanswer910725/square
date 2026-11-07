@@ -3,7 +3,7 @@ import ctypes
 import queue
 import threading
 import tkinter as tk
-from tkinter import filedialog, font as tkfont, messagebox
+from tkinter import filedialog, messagebox
 
 import customtkinter as ctk
 from PIL import Image, ImageGrab, ImageTk
@@ -14,9 +14,42 @@ from ..core.puzzle import make_puzzle
 from ..core.tiles import as_text, decode_tiles
 from .capture import capture_region
 from .preview import open_preview_popup
-from .theme import (ACCENT, ACCENT_HOVER, BG, BORDER, BTN, BTN_HOVER, CARD,
-                    FIELD, MUTED, TEXT, TRACK)
-from .widgets import Tooltip, make_scan_icon, set_window_icon
+from .theme import (ACCENT, ACCENT_HOVER, ACCENT_SOFT, BG, BORDER, BTN,
+                    BTN_HOVER, CARD, FIELD, MUTED, ON_ACCENT, RADIUS,
+                    SCROLL_THUMB, SCROLL_THUMB_HOVER, SURFACE,
+                    TEXT, TEXT_DISABLED, TRACK, TRACK_HOVER)
+from .widgets import (SelectBox, Tooltip, fix_textbox_selection,
+                      make_scan_icon, pick_font_family, set_window_icon)
+
+# ---- 下拉预设（文案即键，变量初值必须取自这里，保证显示值与实际生效值一致）----
+ERROR_OPTIONS = [
+    "L · 最低（容量最大，约 7% 可恢复）",
+    "M · 中等（约 15% 可恢复）",
+    "Q · 较高（约 25% 可恢复）",
+    "H · 最高（容量最小，约 30% 可恢复）",
+]
+QUALITY_OPTIONS = [
+    "紧凑（分片少，码密）",
+    "平衡",
+    "清晰（分片多，码易识别）",
+    "最清晰（分片最多，单码最疏）",
+]
+STRATEGY_OPTIONS = ["自动（推荐）", "强制单码", "强制分片", "压缩+分片"]
+
+# 清晰度 → 每片 base64 载荷上限（字符）。上限越大分片越少、单码模块越密
+QUALITY_PART_LIMIT = {
+    "紧凑（分片少，码密）": 1700,
+    "平衡": 1300,
+    "清晰（分片多，码易识别）": 1000,
+    "最清晰（分片最多，单码最疏）": 750,
+}
+
+# 纠错率 M：通用推荐档，截图/翻拍的摩尔纹与缩放模糊靠 15% 冗余兜底；
+# 容量损失由分片吸收（分片上限不变，只是每片版本略高）
+DEFAULT_ERROR = "M · 中等（约 15% 可恢复）"
+# 清晰度：1000 字符/片，与旧版实际生效值一致；M 纠错下满片约 version 26
+DEFAULT_QUALITY = "清晰（分片多，码易识别）"
+DEFAULT_STRATEGY = "自动（推荐）"
 
 
 class SquareApp:
@@ -46,9 +79,7 @@ class SquareApp:
         self.shard_pool = {}
         self.shard_sig = None
 
-        families = set(tkfont.families(root))
-        base = next((f for f in ("Microsoft YaHei UI", "Microsoft YaHei", "Segoe UI")
-                     if f in families), "TkDefaultFont")
+        base = pick_font_family(root)
         # 字号用整数像素（CTk 的 size 即像素），避免非整数缩放导致的字形重采样
         self.f_ui = ctk.CTkFont(family=base, size=14)
         self.f_sm = ctk.CTkFont(family=base, size=13)
@@ -66,10 +97,10 @@ class SquareApp:
         self.seg = ctk.CTkSegmentedButton(
             self.root, values=["生成器", "解码器"],
             command=self._on_seg_change,
-            font=self.f_ui, height=30, corner_radius=6,
+            font=self.f_ui, height=30, corner_radius=RADIUS,
             fg_color=TRACK, selected_color=CARD, selected_hover_color=CARD,
-            unselected_color=TRACK, unselected_hover_color="#e1e4ea",
-            text_color=MUTED)
+            unselected_color=TRACK, unselected_hover_color=TRACK_HOVER,
+            text_color=MUTED, text_color_disabled=TEXT_DISABLED)
         self.seg.pack(fill="x", padx=12, pady=(10, 0))
         self.seg.set("生成器")
 
@@ -102,7 +133,7 @@ class SquareApp:
         page.grid_rowconfigure(0, weight=1)
 
         # ---- 左：预览 + 参数 + 操作 ----
-        left = ctk.CTkFrame(page, fg_color=CARD, corner_radius=8,
+        left = ctk.CTkFrame(page, fg_color=CARD, corner_radius=RADIUS,
                             border_width=1, border_color=BORDER)
         left.grid(row=0, column=0, sticky="nsew", padx=(0, 8))
         left.grid_columnconfigure(0, weight=1)
@@ -118,7 +149,7 @@ class SquareApp:
                                       size=(16, 16))
         btn_shot = ctk.CTkButton(head, text="", image=self.icon_scan,
                                  command=self._on_capture_region,
-                                 width=28, height=20, corner_radius=5,
+                                 width=28, height=20, corner_radius=RADIUS,
                                  fg_color=BTN, hover_color=BTN_HOVER,
                                  border_width=1, border_color=BORDER)
         btn_shot.pack(side="right")
@@ -129,7 +160,7 @@ class SquareApp:
         preview_wrap.grid_columnconfigure(0, weight=1)
         preview_wrap.grid_rowconfigure(0, weight=1)
 
-        self.preview_canvas = tk.Canvas(preview_wrap, bg=FIELD, height=120, bd=0,
+        self.preview_canvas = tk.Canvas(preview_wrap, bg=SURFACE, height=120, bd=0,
                                         highlightthickness=1,
                                         highlightbackground=BORDER)
         self.preview_canvas.grid(row=0, column=0, sticky="nsew")
@@ -143,7 +174,7 @@ class SquareApp:
         self.preview_hint.grid_remove()
 
         # 生成中的遮罩（盖在预览上，含循环进度条）
-        self.loading = ctk.CTkFrame(preview_wrap, fg_color=FIELD, corner_radius=0,
+        self.loading = ctk.CTkFrame(preview_wrap, fg_color=SURFACE, corner_radius=0,
                                     border_width=1, border_color=BORDER)
         self.loading.grid_columnconfigure(0, weight=1)
         self.loading.grid_rowconfigure(0, weight=1)
@@ -162,52 +193,33 @@ class SquareApp:
         params.grid(row=2, column=0, sticky="ew", padx=12, pady=(8, 0))
         params.grid_columnconfigure(1, weight=1)
 
+        def add_menu(row, variable, values):
+            """只读下拉：整条框和展开菜单都由 SelectBox 自绘。
+
+            CTkOptionMenu / CTkComboBox 的箭头区是独立绘制分区，右段外圈用
+            的是 button_color 而不是 border_color，外框包一层也会被它压断。
+            """
+            SelectBox(params, variable=variable, values=values,
+                      font=self.f_sm, height=30, surface=CARD).grid(
+                row=row, column=1, sticky="ew", pady=2)
+
         ctk.CTkLabel(params, text="纠错率", font=self.f_sm,
                      text_color=MUTED).grid(row=0, column=0, sticky="w",
                                             padx=(0, 8))
-        self.var_error_label = tk.StringVar(value="L · 最低（容量最大，约 7% 可恢复）")
-        ctk.CTkOptionMenu(
-            params, variable=self.var_error_label,
-            values=["L · 最低（容量最大，约 7% 可恢复）",
-                    "M · 中等（约 15% 可恢复）",
-                    "Q · 较高（约 25% 可恢复）",
-                    "H · 最高（容量最小，约 30% 可恢复）"],
-            font=self.f_sm, dropdown_font=self.f_sm, height=28,
-            corner_radius=6, width=120, dynamic_resizing=True,
-            fg_color=FIELD, button_color=TRACK, button_hover_color=BTN_HOVER,
-            text_color=TEXT, dropdown_fg_color=CARD,
-            dropdown_text_color=TEXT, dropdown_hover_color=TRACK).grid(
-            row=0, column=1, sticky="ew", pady=2)
+        self.var_error_label = tk.StringVar(value=DEFAULT_ERROR)
+        add_menu(0, self.var_error_label, ERROR_OPTIONS)
 
         ctk.CTkLabel(params, text="清晰度", font=self.f_sm,
                      text_color=MUTED).grid(row=1, column=0, sticky="w",
                                             padx=(0, 8))
-        self.var_quality = tk.StringVar(value="清晰")
-        ctk.CTkOptionMenu(
-            params, variable=self.var_quality,
-            values=["紧凑（分片少，码密）", "平衡",
-                    "清晰（分片多，码易识别）",
-                    "最清晰（分片最多，version≤20）"],
-            font=self.f_sm, dropdown_font=self.f_sm, height=28,
-            corner_radius=6, width=120, dynamic_resizing=True,
-            fg_color=FIELD, button_color=TRACK, button_hover_color=BTN_HOVER,
-            text_color=TEXT, dropdown_fg_color=CARD,
-            dropdown_text_color=TEXT, dropdown_hover_color=TRACK).grid(
-            row=1, column=1, sticky="ew", pady=2)
+        self.var_quality = tk.StringVar(value=DEFAULT_QUALITY)
+        add_menu(1, self.var_quality, QUALITY_OPTIONS)
 
         ctk.CTkLabel(params, text="编码策略", font=self.f_sm,
                      text_color=MUTED).grid(row=2, column=0, sticky="w",
                                             padx=(0, 8))
-        self.var_strategy = tk.StringVar(value="自动（推荐）")
-        ctk.CTkOptionMenu(
-            params, variable=self.var_strategy,
-            values=["自动（推荐）", "强制单码", "强制分片", "压缩+分片"],
-            font=self.f_sm, dropdown_font=self.f_sm, height=28,
-            corner_radius=6, width=120, dynamic_resizing=True,
-            fg_color=FIELD, button_color=TRACK, button_hover_color=BTN_HOVER,
-            text_color=TEXT, dropdown_fg_color=CARD,
-            dropdown_text_color=TEXT, dropdown_hover_color=TRACK).grid(
-            row=2, column=1, sticky="ew", pady=2)
+        self.var_strategy = tk.StringVar(value=DEFAULT_STRATEGY)
+        add_menu(2, self.var_strategy, STRATEGY_OPTIONS)
 
         # ---- 主操作 ----
         btns = ctk.CTkFrame(left, fg_color="transparent")
@@ -217,19 +229,19 @@ class SquareApp:
 
         self.btn_generate = ctk.CTkButton(
             btns, text="生成二维码", command=self._on_generate,
-            font=self.f_bold, height=32, corner_radius=6,
+            font=self.f_bold, height=32, corner_radius=RADIUS,
             fg_color=ACCENT, hover_color=ACCENT_HOVER,
-            text_color="#ffffff")
+            text_color=ON_ACCENT, text_color_disabled=ON_ACCENT)
         self.btn_generate.grid(row=0, column=0, sticky="ew", padx=(0, 6))
         ctk.CTkButton(btns, text="保存二维码", command=self._on_save_image,
-                      font=self.f_sm, height=32, corner_radius=6,
+                      font=self.f_sm, height=32, corner_radius=RADIUS,
                       fg_color=BTN, hover_color=BTN_HOVER,
                       text_color=TEXT, border_width=1,
                       border_color=BORDER).grid(
             row=0, column=1, sticky="ew")
 
         # ---- 右：文本输入（整列占满高度）----
-        right = ctk.CTkFrame(page, fg_color=CARD, corner_radius=8,
+        right = ctk.CTkFrame(page, fg_color=CARD, corner_radius=RADIUS,
                              border_width=1, border_color=BORDER)
         right.grid(row=0, column=1, sticky="nsew")
         right.grid_columnconfigure(0, weight=1)
@@ -240,11 +252,11 @@ class SquareApp:
         ctk.CTkLabel(head2, text="文本输入", font=self.f_bold,
                      text_color=TEXT).pack(side="left")
         ctk.CTkButton(head2, text="导入", command=self._import_file,
-                      font=self.f_sm, width=52, height=24, corner_radius=6,
+                      font=self.f_sm, width=52, height=24, corner_radius=RADIUS,
                       fg_color=BTN, hover_color=BTN_HOVER, text_color=TEXT,
                       border_width=1, border_color=BORDER).pack(side="right")
         ctk.CTkButton(head2, text="测试", command=self._insert_long_demo,
-                      font=self.f_sm, width=52, height=24, corner_radius=6,
+                      font=self.f_sm, width=52, height=24, corner_radius=RADIUS,
                       fg_color=BTN, hover_color=BTN_HOVER, text_color=TEXT,
                       border_width=1, border_color=BORDER).pack(
             side="right", padx=(0, 4))
@@ -252,15 +264,16 @@ class SquareApp:
         self.text_input = ctk.CTkTextbox(
             right, font=self.f_ui, wrap="word",
             fg_color=FIELD, border_width=1, border_color=BORDER,
-            corner_radius=6, text_color=TEXT,
-            scrollbar_button_color=TRACK,
-            scrollbar_button_hover_color=BTN_HOVER)
+            corner_radius=RADIUS, text_color=TEXT,
+            scrollbar_button_color=SCROLL_THUMB,
+            scrollbar_button_hover_color=SCROLL_THUMB_HOVER)
         self.text_input.grid(row=1, column=0, sticky="nsew",
                              padx=10, pady=(0, 10))
+        fix_textbox_selection(self.text_input)
 
     # ========== 解码器页 ==========
     def _build_decoder_page(self):
-        page = ctk.CTkFrame(self.content, fg_color=CARD, corner_radius=8,
+        page = ctk.CTkFrame(self.content, fg_color=CARD, corner_radius=RADIUS,
                             border_width=1, border_color=BORDER)
         page.grid(row=0, column=0, sticky="nsew")
         self.dec_page = page
@@ -281,7 +294,7 @@ class SquareApp:
         # 只在「分片没收齐」时才出现，平时不占地方
         self.btn_clear_pool = ctk.CTkButton(
             srow, text="清空收集", command=self._clear_pool_ui,
-            font=self.f_xs, width=64, height=22, corner_radius=6,
+            font=self.f_xs, width=64, height=22, corner_radius=RADIUS,
             fg_color=BTN, hover_color=BTN_HOVER, text_color=TEXT,
             border_width=1, border_color=BORDER)
         self.btn_clear_pool.grid(row=0, column=1, padx=(6, 4))
@@ -292,13 +305,13 @@ class SquareApp:
         btn_w = max(self.f_sm.measure(t) for t, _ in entries) + 26
         for col, (text, cmd) in enumerate(entries, start=2):
             ctk.CTkButton(srow, text=text, command=cmd, width=btn_w,
-                          height=24, corner_radius=6, font=self.f_sm,
+                          height=24, corner_radius=RADIUS, font=self.f_sm,
                           fg_color=BTN, hover_color=BTN_HOVER,
                           text_color=TEXT, border_width=1,
                           border_color=BORDER).grid(
                 row=0, column=col, padx=(0, 4) if col == 2 else 0)
 
-        self.scan_canvas = tk.Canvas(page, bg=FIELD, height=120, bd=0,
+        self.scan_canvas = tk.Canvas(page, bg=SURFACE, height=120, bd=0,
                                      highlightthickness=1,
                                      highlightbackground=BORDER)
         self.scan_canvas.grid(row=1, column=0, sticky="nsew", padx=12)
@@ -308,7 +321,7 @@ class SquareApp:
         ctk.CTkLabel(head, text="还原文本", font=self.f_bold,
                      text_color=TEXT).pack(side="left")
         ctk.CTkButton(head, text="复制", width=52, height=24, font=self.f_sm,
-                      corner_radius=6, fg_color=BTN, hover_color=BTN_HOVER,
+                      corner_radius=RADIUS, fg_color=BTN, hover_color=BTN_HOVER,
                       text_color=TEXT, border_width=1, border_color=BORDER,
                       command=lambda: self.root.clipboard_append(
                           self.scan_text.get("1.0", "end"))).pack(side="right")
@@ -316,11 +329,12 @@ class SquareApp:
         self.scan_text = ctk.CTkTextbox(
             page, height=100, font=self.f_ui, wrap="word",
             fg_color=FIELD, border_width=1, border_color=BORDER,
-            corner_radius=6, text_color=TEXT,
-            scrollbar_button_color=TRACK,
-            scrollbar_button_hover_color=BTN_HOVER)
+            corner_radius=RADIUS, text_color=TEXT,
+            scrollbar_button_color=SCROLL_THUMB,
+            scrollbar_button_hover_color=SCROLL_THUMB_HOVER)
         self.scan_text.grid(row=3, column=0, sticky="nsew",
                             padx=12, pady=(0, 12))
+        fix_textbox_selection(self.scan_text)
 
     # ========== 生成器动作 ==========
     def _insert_long_demo(self):
@@ -349,7 +363,7 @@ class SquareApp:
         strategy = {"自动（推荐）": "auto", "强制单码": "single",
                     "强制分片": "split", "压缩+分片": "compress"}.get(
             self.var_strategy.get(), "auto")
-        error = self.var_error_label.get()[0]  # 从 "L · ..." 里取首字母
+        error = self.var_error_label.get()[:1]  # 从 "M · ..." 里取首字母
 
         # 根据策略决定是否压缩
         compressed = False
@@ -369,15 +383,9 @@ class SquareApp:
         elif strategy == "split":
             compressed = False
 
-        # 清晰度 → 每片 payload 上限
-        quality_map = {
-            "紧凑": 1700,
-            "平衡": 1300,
-            "清晰": 1000,
-            "最清晰": 750,
-        }
-        quality_key = self.var_quality.get().split("（")[0]
-        max_b64_len = quality_map.get(quality_key, 1000)
+        # 清晰度 → 每片 payload 上限。直接以完整文案为键，不截断文案再兜底，
+        # 避免"显示某档、实际按另一档生成"
+        max_b64_len = QUALITY_PART_LIMIT[self.var_quality.get()]
 
         # 编码放到后台线程，主线程保持响应（进度条才能动）
         self._set_busy(True)
@@ -433,8 +441,8 @@ class SquareApp:
             self.loading.lift()
             self.loading_bar.start()
             self.btn_generate.configure(state="disabled", text="生成中…",
-                                        fg_color="#9db9f0",
-                                        hover_color="#9db9f0")
+                                        fg_color=ACCENT_SOFT,
+                                        hover_color=ACCENT_SOFT)
             # 编码在后台线程，可能几十毫秒就回来；主线程紧接着要重排预览（卡住），
             # 不在这里强制刷一次，遮罩根本来不及上屏就被撤掉了
             self.root.update_idletasks()

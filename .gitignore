@@ -16,6 +16,9 @@ env/
 # 生成的临时图片
 *.png
 
+# 评审截图
+.review/
+
 # 编辑器
 .idea/
 .vscode/

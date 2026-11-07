@@ -4,7 +4,9 @@ import tkinter as tk
 import customtkinter as ctk
 from PIL import Image, ImageTk
 
-from .theme import ACCENT, ACCENT_HOVER, BG, BORDER, BTN, BTN_HOVER, TEXT, TRACK
+from .theme import (ACCENT, ACCENT_HOVER, BG, BORDER, BTN, BTN_HOVER,
+                    ON_ACCENT, RADIUS, SCROLL_THUMB, SCROLL_THUMB_HOVER,
+                    SURFACE, TEXT, TRACK)
 from .widgets import set_window_icon
 
 
@@ -121,41 +123,43 @@ def open_preview_popup(app):
     ctk.CTkLabel(bar, textvariable=pct_var, width=44, font=app.f_sm,
                  text_color=TEXT).pack(side="left")
     ctk.CTkButton(bar, text="适应窗口", command=fit, width=64, height=26,
-                  font=app.f_sm, corner_radius=6, fg_color=BTN,
+                  font=app.f_sm, corner_radius=RADIUS, fg_color=BTN,
                   hover_color=BTN_HOVER, text_color=TEXT,
                   border_width=1, border_color=BORDER).pack(side="left", padx=4)
     # 右侧按钮组：先 pack 保存原图占住最右端，再 pack 截图识别到它左侧，
     # 两者同宽同高、间距 4px；弹性空白只留在「适应窗口」与这一组之间
     ctk.CTkButton(bar, text="保存原图",
                   command=lambda: app._on_save_image(parent=win),
-                  width=84, height=26, font=app.f_sm, corner_radius=6,
+                  width=84, height=26, font=app.f_sm, corner_radius=RADIUS,
                   fg_color=BTN, hover_color=BTN_HOVER, text_color=TEXT,
                   border_width=1, border_color=BORDER).pack(side="right")
     ctk.CTkButton(bar, text="截图识别",
                   command=lambda: app._on_capture_region(win),
-                  width=84, height=26, font=app.f_sm, corner_radius=6,
+                  width=84, height=26, font=app.f_sm, corner_radius=RADIUS,
                   fg_color=ACCENT, hover_color=ACCENT_HOVER,
-                  text_color="#ffffff").pack(side="right", padx=(0, 4))
+                  text_color=ON_ACCENT).pack(side="right", padx=(0, 4))
 
     # 画布 + 滚动条：两条滚动条都放在同一个 frame 里，
     # 这样「视口基准」= frame 自身尺寸，与滚动条是否显示无关，
     # 显隐不会改变下一次判定的基准（避免经典的两边互相挤出又缩回）
-    canvas_frame = ctk.CTkFrame(win, fg_color="#eceff3", corner_radius=0)
+    canvas_frame = ctk.CTkFrame(win, fg_color=SURFACE, corner_radius=0)
     canvas_frame.grid(row=1, column=0, sticky="nsew", padx=10, pady=(0, 10))
     canvas_frame.grid_columnconfigure(0, weight=1)
     canvas_frame.grid_rowconfigure(0, weight=1)
 
-    canvas = tk.Canvas(canvas_frame, bg="#eceff3", highlightthickness=0)
+    canvas = tk.Canvas(canvas_frame, bg=SURFACE, highlightthickness=0)
     canvas.grid(row=0, column=0, sticky="nsew")
 
     sb_v = ctk.CTkScrollbar(canvas_frame, command=canvas.yview, width=12,
-                            fg_color=TRACK, button_color="#c8cdd6")
+                            fg_color=TRACK, button_color=SCROLL_THUMB,
+                            button_hover_color=SCROLL_THUMB_HOVER)
     sb_v.grid(row=0, column=1, sticky="ns", padx=(4, 0))
     canvas.configure(yscrollcommand=sb_v.set)
 
     sb_h = ctk.CTkScrollbar(canvas_frame, command=canvas.xview, height=12,
                             orientation="horizontal", fg_color=TRACK,
-                            button_color="#c8cdd6")
+                            button_color=SCROLL_THUMB,
+                            button_hover_color=SCROLL_THUMB_HOVER)
     sb_h.grid(row=1, column=0, sticky="ew", pady=(4, 0))
     canvas.configure(xscrollcommand=sb_h.set)
 

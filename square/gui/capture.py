@@ -6,6 +6,8 @@ from tkinter import messagebox
 from PIL import ImageGrab
 
 from ..core.clipboard import copy_image_to_clipboard
+from .theme import OVERLAY_BG, OVERLAY_FG
+from .widgets import pick_font_family
 
 
 def virtual_screen():
@@ -72,14 +74,15 @@ def capture_region(app, owner=None):
         owner.transient(app.root)
         owner.lift()
 
+    fam = pick_font_family(app.root)
     top = tk.Toplevel(app.root)
     top.overrideredirect(True)
     top.attributes("-topmost", True)
     top.attributes("-alpha", 0.34)
-    top.configure(bg="#000000")
+    top.configure(bg=OVERLAY_BG)
     top.geometry(f"{int(vw / k)}x{int(vh / k)}{int(vx / k):+d}{int(vy / k):+d}")
 
-    cv = tk.Canvas(top, bg="#000000", highlightthickness=0,
+    cv = tk.Canvas(top, bg=OVERLAY_BG, highlightthickness=0,
                    cursor="crosshair")
     cv.pack(fill="both", expand=True)
 
@@ -87,7 +90,7 @@ def capture_region(app, owner=None):
     # 若按虚拟桌面宽度居中，多屏时文字会正好压在屏幕接缝处，看起来被裁掉。
     mx, my, mw, mh = monitor_at_cursor()
     hint = cv.create_text(0, 28, text="拖拽框选二维码区域 · Esc / 右键取消",
-                          fill="#ffffff", font=("Microsoft YaHei UI", 14))
+                          fill=OVERLAY_FG, font=(fam, 14))
     bx1, _, bx2, _ = cv.bbox(hint)
     half = (bx2 - bx1) // 2
     left = (mx - vx) / k
@@ -109,12 +112,12 @@ def capture_region(app, owner=None):
             return
         cv.delete("sel")
         cv.create_rectangle(state["sx"], state["sy"], e.x, e.y,
-                            outline="#ffffff", width=2, dash=(4, 3),
+                            outline=OVERLAY_FG, width=2, dash=(4, 3),
                             tags="sel")
         cv.create_text(e.x + 12, e.y + 12, anchor="nw",
                        text=f"{int(abs(e.x - state['sx']) * k)}"
                             f"×{int(abs(e.y - state['sy']) * k)}",
-                       fill="#ffffff", font=("Microsoft YaHei UI", 12),
+                       fill=OVERLAY_FG, font=(fam, 12),
                        tags="sel")
 
     def cancel(_=None):
