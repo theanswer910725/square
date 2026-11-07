@@ -68,9 +68,11 @@ def capture_region(app, owner=None):
     k = tk_to_phys_scale(app.root)
 
     # 上一次补片时可能解除了从属关系（为了让主窗口压到弹窗上面），
-    # 这里恢复：遮罩与弹窗的层级要回到「弹窗在主窗口之上」
+    # 这里恢复：遮罩与弹窗的层级要回到「弹窗在主窗口之上」。
+    # 注意 wm transient 查询返回的是 Tcl 对象，直接与 str 比较永远不相等，
+    # 会导致每次点截图都重设一次 transient 并 lift，预览窗口随之闪一下
     if owner is not None and owner.winfo_exists() \
-            and owner.transient() != str(app.root):
+            and str(owner.transient()) != str(app.root):
         owner.transient(app.root)
         owner.lift()
 
