@@ -10,8 +10,7 @@ from PIL import Image, ImageGrab, ImageTk
 
 from ..core.codec import (assemble_frames, decode_strings,
                           effective_part_limit, encode, fits_single,
-                          parse_frames, part_capacity_chars,
-                          single_capacity)
+                          parse_frames, single_capacity)
 from ..core.puzzle import make_puzzle
 from ..core.tiles import as_text, decode_tiles
 from .capture import capture_region
@@ -207,7 +206,7 @@ class SquareApp:
                                  fg_color=BTN, hover_color=BTN_HOVER,
                                  border_width=1, border_color=BORDER)
         btn_shot.pack(side="right")
-        Tooltip(btn_shot, "截图：框选屏幕区域并送解码")
+        Tooltip(btn_shot, "截图：框选屏幕区域后送至解码器")
 
         preview_wrap = ctk.CTkFrame(left, fg_color="transparent")
         preview_wrap.grid(row=1, column=0, sticky="nsew", padx=12)
@@ -222,7 +221,7 @@ class SquareApp:
         self.preview_canvas.bind("<Configure>", self._refit_preview)
 
         # 图片下方的提醒文字（有二维码时才显示）
-        self.preview_hint = ctk.CTkLabel(preview_wrap, text="点击可放大",
+        self.preview_hint = ctk.CTkLabel(preview_wrap, text="点击可查看大图",
                                          font=self.f_xs, text_color=MUTED)
         self.preview_hint.grid(row=1, column=0, pady=(4, 0))
         self.preview_hint.grid_remove()
@@ -281,6 +280,12 @@ class SquareApp:
         self.param_hint = ctk.CTkLabel(
             params, text="", font=self.f_xs, text_color=MUTED,
             anchor="w", justify="left", wraplength=int(380 * dpi))
+        # 文案较长（压缩说明、容量受限说明）时按实际可用宽度折行，
+        # 避免被标签宽度裁掉后半句
+        self.param_hint.bind(
+            "<Configure>",
+            lambda e: self.param_hint.configure(
+                wraplength=max(120, e.width - 4)))
         self.param_hint.grid(row=3, column=0, columnspan=2, sticky="ew",
                              pady=(4, 0))
         self.param_hint.grid_remove()
@@ -350,7 +355,7 @@ class SquareApp:
         srow = ctk.CTkFrame(page, fg_color="transparent")
         srow.grid(row=0, column=0, sticky="ew", padx=12, pady=(10, 4))
         srow.grid_columnconfigure(0, weight=1)
-        self.scan_status = tk.StringVar(value="等待输入图片…")
+        self.scan_status = tk.StringVar(value="等待输入图片")
         self.scan_status_label = ctk.CTkLabel(
             srow, textvariable=self.scan_status, font=self.f_sm,
             text_color=MUTED, anchor="w")
@@ -425,9 +430,8 @@ class SquareApp:
         lines = []
         if limit < tier:
             lines.append(
-                f"当前纠错率「{error_label}」下单码最多 "
-                f"{part_capacity_chars(error)} 字符/片，"
-                f"每片上限已由 {tier} 降为 {limit}")
+                f"当前纠错率「{error_label}」下单码容量有限，"
+                f"每片上限已由 {tier} 字符降为 {limit} 字符。")
         if self.var_strategy.get() == STRATEGY_OPTIONS[3]:
             lines.append("压缩码仅可本软件还原，通用扫码工具读取到的内容为编码字符串非原始文本。")
         text = "\n".join(lines)
@@ -443,7 +447,8 @@ class SquareApp:
 
         text = self.text_input.get("1.0", "end").strip()
         if not text:
-            messagebox.showwarning("提示", "请输入要编码的文本", parent=self.root)
+            messagebox.showwarning("无法生成", "请输入待编码的文本。",
+                                   parent=self.root)
             return
 
         orig_len = len(text.encode("utf-8"))
@@ -457,12 +462,11 @@ class SquareApp:
             cap = single_capacity(error)
             over = max(0, orig_len - cap)
             messagebox.showerror(
-                "超出单码容量",
+                "内容超出单码容量",
                 f"当前纠错率「{self.var_error_label.get()}」下，"
-                f"单码最多 {cap} 字节；\n"
-                f"当前内容 {orig_len} 字节，超出 {over} 字节。\n\n"
-                "可以：降低纠错率（「最低」容量最大）、缩短文本，"
-                "或改用「自动 / 强制分片」。",
+                f"单码容量为 {cap} 字节；当前内容为 {orig_len} 字节，"
+                f"超出 {over} 字节。\n\n"
+                "可降低纠错率、缩短内容，或改用「自动」「强制分片」策略。",
                 parent=self.root)
             return
 
@@ -518,7 +522,7 @@ class SquareApp:
 
     def _generate_failed(self, msg):
         self._set_busy(False)
-        messagebox.showerror("生成失败", msg, parent=self.root)
+        messagebox.showerror("二维码生成失败", msg, parent=self.root)
 
     def _set_busy(self, busy):
         self._busy = busy
@@ -526,7 +530,7 @@ class SquareApp:
             self.loading.place(x=0, y=0, relwidth=1, relheight=1)
             self.loading.lift()
             self.loading_bar.start()
-            self.btn_generate.configure(state="disabled", text="生成中…",
+            self.btn_generate.configure(state="disabled", text="生成中……",
                                         fg_color=ACCENT_SOFT,
                                         hover_color=ACCENT_SOFT)
             # 编码在后台线程，可能几十毫秒就回来；主线程紧接着要重排预览（卡住），
@@ -599,7 +603,8 @@ class SquareApp:
         # 大图弹窗里点「保存原图」时把弹窗传进来，对话框才会跟着弹窗置前
         parent = parent or self.root
         if not self.gen_result:
-            messagebox.showwarning("提示", "请先生成二维码", parent=parent)
+            messagebox.showwarning("无法保存", "当前尚未生成二维码，请先生成。",
+                                   parent=parent)
             return
         path = filedialog.asksaveasfilename(
             defaultextension=".png",
@@ -659,10 +664,10 @@ class SquareApp:
             self.scan_text.insert("1.0", prefix + "\n\n")
         self.scan_text.insert("end",
             text_line + "\n\n"
-            f"可以继续补充：再框选/选择一张含缺失分片的图，"
-            f"已收集的片会按片号自动合并，凑齐后自动还原，不用再点一次。\n\n"
-            f"更快的无损路径：生成器点「保存二维码」拿到原图，"
-            f"再用「选择图片」按原始分辨率解码，一次就能全中。")
+            f"可继续补充：再框选或选择一张包含缺失分片的图片，"
+            f"已收集分片将按片号自动合并，收齐后自动还原。\n\n"
+            f"更快的无损方式：在生成器点击「保存二维码」获取原图，"
+            f"再通过「选择图片」按原始分辨率识别。")
         self.scan_status.set(status_line)
 
     def _scan_image(self, pil_img):
@@ -673,17 +678,18 @@ class SquareApp:
         """
         from pyzbar.pyzbar import decode as pz_decode
 
-        self.scan_status.set("正在检测...")
+        self.scan_status.set("正在识别图片……")
         self.root.update()
 
         try:
             results = pz_decode(pil_img)
         except Exception as e:
-            self.scan_status.set(f"pyzbar 错误: {e}")
+            self.scan_status.set(f"识别过程出错：{e}")
             return "error"
 
         n = len(results)
-        self.scan_status.set(f"检测到 {n} 个二维码")
+        if n:       # 0 个不报数，最终统一落到「未识别到二维码」
+            self.scan_status.set(f"已识别到 {n} 个二维码")
 
         # 渲染图片预览（按画布尺寸缩放并居中）
         display = pil_img.copy()
@@ -704,7 +710,7 @@ class SquareApp:
         frames = parse_frames(raw_strings)
         if n == 0 or (frames and len({f["index"] for f in frames}) <
                       frames[0]["total"]):
-            self.scan_status.set("正在细分识别…")
+            self.scan_status.set("正在细分识别……")
             self.root.update()
             extra = [s for s in decode_tiles(pil_img) if s not in raw_strings]
             if extra:
@@ -743,7 +749,7 @@ class SquareApp:
 
         if status == "raw":
             self.scan_text.insert("1.0", result["text"])
-            self.scan_status.set(f"纯文本: {len(result['text'])} chars")
+            self.scan_status.set(f"纯文本：{len(result['text'])} 字符")
             self._reset_pool()
             return "ok"
 
@@ -752,9 +758,9 @@ class SquareApp:
             if res["status"] == "partial":
                 self._show_partial(
                     res["have"], res["total"], res["missing"],
-                    prefix="(本次没有识别到二维码，已保留之前收集的分片)")
+                    prefix="（本次未识别到二维码，已保留先前收集的分片）")
                 return "partial"
-        self.scan_text.insert("1.0", "(没有可识别的文本内容)")
+        self.scan_text.insert("1.0", "（没有可识别的文本内容）")
         self.scan_status.set("未识别到二维码")
         return "none"
 
@@ -767,8 +773,7 @@ class SquareApp:
             img = Image.open(path)
             img.load()
         except Exception as e:
-            messagebox.showerror("打不开图片",
-                                 f"图片读取失败：{e}", parent=self.root)
+            messagebox.showerror("图片读取失败", str(e), parent=self.root)
             return
         self._scan_image(img)
 
@@ -780,11 +785,12 @@ class SquareApp:
             elif isinstance(img, list) and img:      # 复制的是文件
                 self._scan_image(Image.open(img[0]))
             else:
-                self.scan_status.set("剪贴板里没有图片")
-                messagebox.showinfo("提示", "剪贴板里没有图片", parent=self.root)
+                self.scan_status.set("剪贴板中没有图片")
+                messagebox.showinfo("无法读取图片", "剪贴板中没有图片。",
+                                    parent=self.root)
         except Exception as e:
-            self.scan_status.set(f"读取剪贴板失败: {e}")
-            messagebox.showerror("错误", str(e), parent=self.root)
+            self.scan_status.set(f"读取剪贴板失败：{e}")
+            messagebox.showerror("无法读取剪贴板", str(e), parent=self.root)
 
 
 def run():

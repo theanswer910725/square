@@ -62,7 +62,7 @@ def capture_region(app, owner=None):
     """
     vx, vy, vw, vh = virtual_screen()
     if vw <= 0 or vh <= 0:
-        messagebox.showerror("错误", "无法获取屏幕尺寸",
+        messagebox.showerror("截图失败", "无法获取屏幕尺寸。",
                              parent=owner or app.root)
         return
     k = tk_to_phys_scale(app.root)
@@ -91,7 +91,7 @@ def capture_region(app, owner=None):
     # 遮罩按虚拟桌面铺满所有显示器；提示文字要居中在「鼠标所在显示器」上。
     # 若按虚拟桌面宽度居中，多屏时文字会正好压在屏幕接缝处，看起来被裁掉。
     mx, my, mw, mh = monitor_at_cursor()
-    hint = cv.create_text(0, 28, text="拖拽框选二维码区域 · Esc / 右键取消",
+    hint = cv.create_text(0, 28, text="拖拽框选二维码区域；按 Esc 或右键取消",
                           fill=OVERLAY_FG, font=(fam, 14))
     bx1, _, bx2, _ = cv.bbox(hint)
     half = (bx2 - bx1) // 2
@@ -143,7 +143,7 @@ def capture_region(app, owner=None):
         py2 = int(round(vy + y2 * k))
         top.destroy()
         if px2 - px1 < 24 or py2 - py1 < 24:
-            messagebox.showinfo("提示", "框选区域太小，请重新框选",
+            messagebox.showinfo("提示", "框选区域过小，请重新框选。",
                                 parent=owner or app.root)
             return
         # 遮罩已销毁，留一点时间给桌面重绘，再抓真实像素
@@ -183,8 +183,7 @@ def finish_region(app, px1, py1, px2, py2, owner=None):
     try:
         full = ImageGrab.grab(all_screens=True)
     except Exception as e:
-        messagebox.showerror("错误", f"截图失败: {e}",
-                             parent=owner or app.root)
+        messagebox.showerror("截图失败", str(e), parent=owner or app.root)
         return
     # all_screens 的图左上角对应虚拟屏原点 (vx, vy)
     img = full.crop((px1 - vx, py1 - vy, px2 - vx, py2 - vy))
@@ -193,7 +192,7 @@ def finish_region(app, px1, py1, px2, py2, owner=None):
         copy_image_to_clipboard(img)
     except Exception as e:
         # 剪贴板写不进去不影响后面的解码，但要明确告知，否则用户会以为没反应
-        messagebox.showwarning("提示", f"写入剪贴板失败: {e}",
+        messagebox.showwarning("提示", f"写入剪贴板失败：{e}",
                                parent=owner or app.root)
 
     app.seg.set("解码器")
