@@ -1,0 +1,13 @@
+"""界面配色与基础尺寸常量。"""
+
+BG = "#f5f6f8"
+CARD = "#ffffff"
+FIELD = "#fafbfc"
+BORDER = "#e3e6ea"
+TEXT = "#1f2328"
+MUTED = "#5c6572"
+ACCENT = "#2563eb"
+ACCENT_HOVER = "#1d4ed8"
+BTN = "#f1f3f6"
+BTN_HOVER = "#e6e9ee"
+TRACK = "#e9ecf1"

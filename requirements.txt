@@ -2,3 +2,4 @@ customtkinter>=5.2.2
 pillow>=10.0.0
 segno>=1.6.0
 pyzbar>=0.1.9
+numpy>=1.24
