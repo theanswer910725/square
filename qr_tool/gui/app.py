@@ -73,15 +73,9 @@ class QRToolApp:
         self.seg.pack(fill="x", padx=12, pady=(10, 0))
         self.seg.set("生成器")
 
-        # 状态条
-        self.status = tk.StringVar(value="就绪")
-        ctk.CTkLabel(self.root, textvariable=self.status, font=self.f_sm,
-                     text_color=MUTED, anchor="w").pack(
-            side="bottom", fill="x", padx=12, pady=(0, 6))
-
         # 页面容器
         self.content = ctk.CTkFrame(self.root, fg_color="transparent")
-        self.content.pack(fill="both", expand=True, padx=12, pady=(8, 0))
+        self.content.pack(fill="both", expand=True, padx=12, pady=(8, 10))
         self.content.grid_columnconfigure(0, weight=1)
         self.content.grid_rowconfigure(0, weight=1)
 
@@ -425,18 +419,12 @@ class QRToolApp:
     def _generate_done(self, result):
         self.gen_result = result
         self._render_preview(result)
-        versions = [qr.version for qr in result["qrs"]]
-        self.status.set(
-            f"{result['total_parts']} 片 · version {min(versions)}-{max(versions)} · "
-            f"{result['original_bytes']} bytes"
-        )
         self._set_busy(False)
         # 换了新文本：清掉上一组收集的分片
         self._reset_pool()
 
     def _generate_failed(self, msg):
         self._set_busy(False)
-        self.status.set("生成失败")
         messagebox.showerror("生成失败", msg, parent=self.root)
 
     def _set_busy(self, busy):
@@ -448,7 +436,6 @@ class QRToolApp:
             self.btn_generate.configure(state="disabled", text="生成中…",
                                         fg_color="#9db9f0",
                                         hover_color="#9db9f0")
-            self.status.set("正在生成…")
             # 编码在后台线程，可能几十毫秒就回来；主线程紧接着要重排预览（卡住），
             # 不在这里强制刷一次，遮罩根本来不及上屏就被撤掉了
             self.root.update_idletasks()
@@ -528,7 +515,6 @@ class QRToolApp:
         if path:
             cols = min(4, len(self.gen_result["qrs"]))
             make_puzzle(self.gen_result["qrs"], cols=cols, scale=15).save(path)
-            self.status.set(f"二维码已保存: {path}")
 
     # ========== 解码器动作 ==========
     def _reset_pool(self):
@@ -653,8 +639,16 @@ class QRToolApp:
     def _on_scan_file(self):
         path = filedialog.askopenfilename(
             filetypes=[("图片", "*.png *.jpg *.jpeg *.bmp *.gif"), ("所有文件", "*.*")])
-        if path:
-            self._scan_image(Image.open(path))
+        if not path:
+            return
+        try:
+            img = Image.open(path)
+            img.load()
+        except Exception as e:
+            messagebox.showerror("打不开图片",
+                                 f"图片读取失败：{e}", parent=self.root)
+            return
+        self._scan_image(img)
 
     def _on_scan_clipboard(self):
         try:
@@ -671,7 +665,6 @@ class QRToolApp:
             messagebox.showerror("错误", str(e), parent=self.root)
 
     def _on_scan_fullscreen(self):
-        self.status.set("3 秒后截图全屏，请切换到目标窗口...")
         self.root.iconify()
 
         def do_capture():

@@ -118,12 +118,12 @@ def capture_region(app, owner=None):
                        tags="sel")
 
     def cancel(_=None):
-        # Esc / 右键同一条取消路径；closed 保证连点多次也只关一次
+        # Esc / 右键同一条取消路径；closed 保证连点多次也只关一次。
+        # 取消是用户主动行为，遮罩消失本身就是反馈，不再弹提示
         if state["closed"]:
             return
         state["closed"] = True
         top.destroy()          # 遮罩销毁，绑定随控件一起释放，不留监听
-        app.status.set("已取消截图")
 
     def on_release(e):
         # 拖拽中右键取消后，左键松开不能再触发截图
@@ -187,7 +187,9 @@ def finish_region(app, px1, py1, px2, py2, owner=None):
     try:
         copy_image_to_clipboard(img)
     except Exception as e:
-        app.status.set(f"写入剪贴板失败: {e}")
+        # 剪贴板写不进去不影响后面的解码，但要明确告知，否则用户会以为没反应
+        messagebox.showwarning("提示", f"写入剪贴板失败: {e}",
+                               parent=owner or app.root)
 
     app.seg.set("解码器")
     app._show_page(1)

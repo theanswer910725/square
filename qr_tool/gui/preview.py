@@ -4,8 +4,7 @@ import tkinter as tk
 import customtkinter as ctk
 from PIL import Image, ImageTk
 
-from .theme import (ACCENT, ACCENT_HOVER, BG, BORDER, BTN, BTN_HOVER, MUTED,
-                    TEXT, TRACK)
+from .theme import ACCENT, ACCENT_HOVER, BG, BORDER, BTN, BTN_HOVER, TEXT, TRACK
 
 
 def open_preview_popup(app):
@@ -29,8 +28,9 @@ def open_preview_popup(app):
     bar = ctk.CTkFrame(win, fg_color="transparent")
     bar.grid(row=0, column=0, sticky="ew", padx=10, pady=8)
 
+    # 与工具条上的百分比、按钮文字同色，避免比次要文字更浅而读不清
     ctk.CTkLabel(bar, text="缩放", font=app.f_sm,
-                 text_color=MUTED).pack(side="left")
+                 text_color=TEXT).pack(side="left")
     zoom_var = tk.DoubleVar(value=1.0)
     pct_var = tk.StringVar(value="100%")
 
@@ -51,9 +51,10 @@ def open_preview_popup(app):
         fh = canvas_frame.winfo_height()
         if fw <= 1 or fh <= 1:
             return
-        # 该方向装得下就隐藏该方向的滚动条；隐藏后可视区只会更大，
-        # 判定结果不会翻转。横纵互相独立，不会互相触发。
-        want_v, want_h = w > fw, h > fh
+        # 竖条看「高」是否溢出、横条看「宽」是否溢出，两者互不影响。
+        # 基准用 frame 尺寸而不是 canvas 尺寸：后者会被滚动条占位改变，
+        # 用它会形成「显隐改尺寸 → 重新判定」的回环。
+        want_v, want_h = h > fh, w > fw
         if want_v != img_state["vbar"]:
             img_state["vbar"] = want_v
             if want_v:
@@ -81,8 +82,6 @@ def open_preview_popup(app):
             canvas.configure(scrollregion="")
             canvas.xview_moveto(0)
             canvas.yview_moveto(0)
-        size_lbl.configure(
-            text=f"原图 {puzzle.width}×{puzzle.height}  ·  显示 {w}×{h}")
 
     def refresh():
         z = zoom_var.get()
@@ -140,7 +139,7 @@ def open_preview_popup(app):
     # 这样「视口基准」= frame 自身尺寸，与滚动条是否显示无关，
     # 显隐不会改变下一次判定的基准（避免经典的两边互相挤出又缩回）
     canvas_frame = ctk.CTkFrame(win, fg_color="#eceff3", corner_radius=0)
-    canvas_frame.grid(row=1, column=0, sticky="nsew", padx=10, pady=(0, 4))
+    canvas_frame.grid(row=1, column=0, sticky="nsew", padx=10, pady=(0, 10))
     canvas_frame.grid_columnconfigure(0, weight=1)
     canvas_frame.grid_rowconfigure(0, weight=1)
 
@@ -162,15 +161,14 @@ def open_preview_popup(app):
     sb_v.grid_remove()
     sb_h.grid_remove()
 
-    size_lbl = ctk.CTkLabel(win, text="", font=app.f_sm, text_color=MUTED)
-    size_lbl.grid(row=2, column=0, sticky="w", padx=10, pady=(2, 8))
-
     # 改变弹窗尺寸后重新判断两条滚动条
     canvas_frame.bind("<Configure>", lambda e: layout())
 
-    # 鼠标滚轮缩放
+    # 鼠标滚轮缩放：向上滚放大，向下滚缩小。
+    # 只按符号判方向、一律走固定步长 0.1，兼容 ±120（常规滚轮）
+    # 与 ±1 等不同粒度的触控板/高精度滚轮事件，不会因绝对值大小而跳变
     def _wheel(e):
-        delta = -0.1 if e.delta > 0 else 0.1
+        delta = 0.1 if e.delta > 0 else -0.1
         new = max(0.05, min(2.0, zoom_var.get() + delta))
         zoom_var.set(round(new, 2))
         refresh()
