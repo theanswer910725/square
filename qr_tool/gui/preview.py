@@ -6,7 +6,6 @@ from PIL import Image, ImageTk
 
 from .theme import (ACCENT, ACCENT_HOVER, BG, BORDER, BTN, BTN_HOVER, MUTED,
                     TEXT, TRACK)
-from .widgets import Tooltip
 
 
 def open_preview_popup(app):
@@ -18,6 +17,8 @@ def open_preview_popup(app):
     pw = min(760, win.winfo_screenwidth() - 60)
     ph = min(620, win.winfo_screenheight() - 60)
     win.geometry(f"{pw}x{ph}")
+    # 工具条完整排布所需的最小宽度：再窄会压缩按钮并截断文字
+    win.minsize(500, 1)
     win.configure(fg_color=BG)
     win.grid_columnconfigure(0, weight=1)
     win.grid_rowconfigure(1, weight=1)
@@ -122,20 +123,18 @@ def open_preview_popup(app):
                   font=app.f_sm, corner_radius=6, fg_color=BTN,
                   hover_color=BTN_HOVER, text_color=TEXT,
                   border_width=1, border_color=BORDER).pack(side="left", padx=4)
-    # 与主预览区右上角那颗截图按钮完全一致（同图标、同尺寸、同提示、同回调）
-    btn_shot = ctk.CTkButton(bar, text="", image=app.icon_scan,
-                             command=lambda: app._on_capture_region(win),
-                             width=28, height=20, corner_radius=5,
-                             fg_color=BTN, hover_color=BTN_HOVER,
-                             border_width=1, border_color=BORDER)
-    btn_shot.pack(side="right", padx=(4, 0))
-    Tooltip(btn_shot, "截图：框选屏幕区域并送解码")
-
+    # 右侧按钮组：先 pack 保存原图占住最右端，再 pack 截图识别到它左侧，
+    # 两者同宽同高、间距 4px；弹性空白只留在「适应窗口」与这一组之间
     ctk.CTkButton(bar, text="保存原图",
                   command=lambda: app._on_save_image(parent=win),
-                  width=64, height=26, font=app.f_sm, corner_radius=6,
+                  width=84, height=26, font=app.f_sm, corner_radius=6,
                   fg_color=BTN, hover_color=BTN_HOVER, text_color=TEXT,
                   border_width=1, border_color=BORDER).pack(side="right")
+    ctk.CTkButton(bar, text="截图识别",
+                  command=lambda: app._on_capture_region(win),
+                  width=84, height=26, font=app.f_sm, corner_radius=6,
+                  fg_color=ACCENT, hover_color=ACCENT_HOVER,
+                  text_color="#ffffff").pack(side="right", padx=(0, 4))
 
     # 画布 + 滚动条：两条滚动条都放在同一个 frame 里，
     # 这样「视口基准」= frame 自身尺寸，与滚动条是否显示无关，
