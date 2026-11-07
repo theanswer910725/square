@@ -1,5 +1,14 @@
 # 方寸 · Square
 
+<p>
+  <img src="https://img.shields.io/badge/Python-3.12-3776AB?logo=python&logoColor=white" alt="Python 3.12" height="20">
+  <img src="https://img.shields.io/badge/Platform-Windows-0078D4?logo=windows&logoColor=white" alt="Platform Windows" height="20">
+  <img src="https://img.shields.io/badge/UI-CustomTkinter-4A6FA5" alt="UI CustomTkinter" height="20">
+  <img src="https://img.shields.io/badge/License-MIT-green?logo=opensourceinitiative&logoColor=white" alt="License MIT" height="20">
+  <img src="https://img.shields.io/badge/Size-25.25%20MiB-6B7280" alt="Size 25.25 MiB" height="20">
+  <img src="https://img.shields.io/badge/Version-1.0.0-4A5568" alt="Version 1.0.0" height="20">
+</p>
+
 > 方寸之间，藏尽千言
 
 方寸 · Square 把任意长度的文本编码成面积最小的二维码，也能把任意一张二维码图片还原成原文。
