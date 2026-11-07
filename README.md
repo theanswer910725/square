@@ -4,6 +4,7 @@
   <img src="https://img.shields.io/badge/Python-3.12-EA6B33?labelColor=3A3A3A&logo=python&logoColor=white" alt="Python 3.12" height="20">
   <img src="https://img.shields.io/badge/Build-passing-2EA043?labelColor=3A3A3A" alt="Build passing" height="20">
   <img src="https://img.shields.io/badge/License-MIT-1F6FBF?labelColor=3A3A3A" alt="License MIT" height="20">
+  <img src="https://img.shields.io/badge/UI-CustomTkinter-8957E5?labelColor=3A3A3A" alt="UI CustomTkinter" height="20">
   <img src="https://img.shields.io/badge/Version-1.0.0-C9A227?labelColor=3A3A3A" alt="Version 1.0.0" height="20">
 </p>
 
