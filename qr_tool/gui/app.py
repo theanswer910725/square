@@ -265,26 +265,14 @@ class QRToolApp:
         page.grid(row=0, column=0, sticky="nsew")
         self.dec_page = page
         page.grid_columnconfigure(0, weight=1)
-        page.grid_rowconfigure(2, weight=3)
-        page.grid_rowconfigure(4, weight=2)
+        page.grid_rowconfigure(1, weight=3)
+        page.grid_rowconfigure(3, weight=2)
 
-        top = ctk.CTkFrame(page, fg_color="transparent")
-        top.grid(row=0, column=0, sticky="ew", padx=12, pady=(10, 0))
-        top.grid_columnconfigure(0, weight=1)
-        top.grid_columnconfigure(1, weight=1)
-        for i, (text, cmd) in enumerate([("选择图片", self._on_scan_file),
-                                         ("剪贴板", self._on_scan_clipboard),
-                                         ("全屏截图", self._on_scan_fullscreen),
-                                         ("区域截图", self._on_scan_region)]):
-            ctk.CTkButton(top, text=text, command=cmd, font=self.f_sm,
-                          height=28, corner_radius=6, fg_color=BTN,
-                          hover_color=BTN_HOVER, text_color=TEXT,
-                          border_width=1, border_color=BORDER).grid(
-                row=i // 2, column=i % 2, sticky="ew", pady=(0, 4),
-                padx=(0, 4) if i % 2 == 0 else 0)
-
+        # 状态行：左侧检测状态，右侧依次是「清空收集」（仅未收齐时出现）、
+        # 「选择图片」「剪贴板」，全部垂直居中；右侧小按钮与「复制」同款。
+        # 截图链路不在这里：主界面预览卡右上角与大图弹窗仍走 _on_capture_region
         srow = ctk.CTkFrame(page, fg_color="transparent")
-        srow.grid(row=1, column=0, sticky="ew", padx=12, pady=(4, 4))
+        srow.grid(row=0, column=0, sticky="ew", padx=12, pady=(10, 4))
         srow.grid_columnconfigure(0, weight=1)
         self.scan_status = tk.StringVar(value="等待输入图片…")
         ctk.CTkLabel(srow, textvariable=self.scan_status, font=self.f_sm,
@@ -296,16 +284,27 @@ class QRToolApp:
             font=self.f_xs, width=64, height=22, corner_radius=6,
             fg_color=BTN, hover_color=BTN_HOVER, text_color=TEXT,
             border_width=1, border_color=BORDER)
-        self.btn_clear_pool.grid(row=0, column=1, padx=(6, 0))
+        self.btn_clear_pool.grid(row=0, column=1, padx=(6, 4))
         self.btn_clear_pool.grid_remove()
+        # 两颗按钮取较宽者的宽度，右缘贴齐状态行右侧
+        entries = [("选择图片", self._on_scan_file),
+                   ("剪贴板", self._on_scan_clipboard)]
+        btn_w = max(self.f_sm.measure(t) for t, _ in entries) + 26
+        for col, (text, cmd) in enumerate(entries, start=2):
+            ctk.CTkButton(srow, text=text, command=cmd, width=btn_w,
+                          height=24, corner_radius=6, font=self.f_sm,
+                          fg_color=BTN, hover_color=BTN_HOVER,
+                          text_color=TEXT, border_width=1,
+                          border_color=BORDER).grid(
+                row=0, column=col, padx=(0, 4) if col == 2 else 0)
 
         self.scan_canvas = tk.Canvas(page, bg=FIELD, height=120, bd=0,
                                      highlightthickness=1,
                                      highlightbackground=BORDER)
-        self.scan_canvas.grid(row=2, column=0, sticky="nsew", padx=12)
+        self.scan_canvas.grid(row=1, column=0, sticky="nsew", padx=12)
 
         head = ctk.CTkFrame(page, fg_color="transparent")
-        head.grid(row=3, column=0, sticky="ew", padx=12, pady=(8, 4))
+        head.grid(row=2, column=0, sticky="ew", padx=12, pady=(8, 4))
         ctk.CTkLabel(head, text="还原文本", font=self.f_bold,
                      text_color=TEXT).pack(side="left")
         ctk.CTkButton(head, text="复制", width=52, height=24, font=self.f_sm,
@@ -320,7 +319,7 @@ class QRToolApp:
             corner_radius=6, text_color=TEXT,
             scrollbar_button_color=TRACK,
             scrollbar_button_hover_color=BTN_HOVER)
-        self.scan_text.grid(row=4, column=0, sticky="nsew",
+        self.scan_text.grid(row=3, column=0, sticky="nsew",
                             padx=12, pady=(0, 12))
 
     # ========== 生成器动作 ==========
@@ -663,22 +662,6 @@ class QRToolApp:
         except Exception as e:
             self.scan_status.set(f"读取剪贴板失败: {e}")
             messagebox.showerror("错误", str(e), parent=self.root)
-
-    def _on_scan_fullscreen(self):
-        self.root.iconify()
-
-        def do_capture():
-            import time
-            time.sleep(2.5)
-            img = ImageGrab.grab(all_screens=True)
-            # Tk 只能在主线程操作
-            self.root.after(0, lambda: (
-                self.root.deiconify(), self._scan_image(img)))
-
-        threading.Thread(target=do_capture, daemon=True).start()
-
-    def _on_scan_region(self):
-        self._on_capture_region()
 
 
 def run():
