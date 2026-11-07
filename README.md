@@ -2,10 +2,10 @@
 
 <p>
   <img src="https://img.shields.io/badge/Python-3.12-3776AB?logo=python&logoColor=white" alt="Python 3.12" height="20">
-  <img src="https://img.shields.io/badge/Build-passing-brightgreen?logo=githubactions&logoColor=white" alt="Build passing" height="20">
+  <img src="https://img.shields.io/badge/Build-passing-2DA44E?logo=githubactions&logoColor=white" alt="Build passing" height="20">
   <img src="https://img.shields.io/badge/UI-CustomTkinter-4A6FA5" alt="UI CustomTkinter" height="20">
-  <img src="https://img.shields.io/badge/License-MIT-green?logo=opensourceinitiative&logoColor=white" alt="License MIT" height="20">
-  <img src="https://img.shields.io/badge/Version-1.0.0-4A5568" alt="Version 1.0.0" height="20">
+  <img src="https://img.shields.io/badge/License-MIT-2DA44E?logo=opensourceinitiative&logoColor=white" alt="License MIT" height="20">
+  <img src="https://img.shields.io/badge/Version-1.0.0-6E7781" alt="Version 1.0.0" height="20">
 </p>
 
 > 方寸之间，藏尽千言
