@@ -552,14 +552,16 @@ class QRToolApp:
             f"可以继续补充：再框选/选择一张含缺失分片的图，"
             f"已收集的片会按片号自动合并，凑齐后自动还原，不用再点一次。\n\n"
             f"更快的无损路径：生成器点「保存二维码」拿到原图，"
-            f"再用「选择图片」按原始分辨率解码，一次就能全中。\n\n"
-            f"提示：模块不足 2 像素时任何解码器都无法还原，"
-            f"这是采样不足，不是软件故障。")
+            f"再用「选择图片」按原始分辨率解码，一次就能全中。")
         self.scan_status.set(f"⚠ 已收集 {have}/{total} · 缺 {miss}")
         self.btn_clear_pool.grid()
 
     def _scan_image(self, pil_img):
-        """对 PIL Image 执行多码检测 + 重组；分片按片号累计到收集池"""
+        """对 PIL Image 执行多码检测 + 重组；分片按片号累计到收集池
+
+        返回 "ok"（收齐/单码文本）、"partial"（分片未收齐）、
+        "none"（没识别到）或 "error"（解码器异常）。
+        """
         from pyzbar.pyzbar import decode as pz_decode
 
         self.scan_status.set("正在检测...")
@@ -569,7 +571,7 @@ class QRToolApp:
             results = pz_decode(pil_img)
         except Exception as e:
             self.scan_status.set(f"pyzbar 错误: {e}")
-            return 0
+            return "error"
 
         n = len(results)
         self.scan_status.set(f"检测到 {n} 个二维码")
@@ -624,31 +626,29 @@ class QRToolApp:
             self.scan_status.set(
                 f"✓ 还原成功 · {len(text)} 字符 · {len(text.encode('utf-8'))} bytes")
             self._reset_pool()
+            return "ok"
 
-        elif status == "partial":
+        if status == "partial":
             self._show_partial(result["have"], result["total"],
                                result["missing"])
+            return "partial"
 
-        elif status == "raw":
+        if status == "raw":
             self.scan_text.insert("1.0", result["text"])
             self.scan_status.set(f"纯文本: {len(result['text'])} chars")
             self._reset_pool()
+            return "ok"
 
-        else:
-            if self.shard_pool:
-                res = assemble_frames(list(self.shard_pool.values()))
-                if res["status"] == "partial":
-                    self._show_partial(
-                        res["have"], res["total"], res["missing"],
-                        prefix="(本次没有识别到二维码，已保留之前收集的分片)")
-                else:
-                    self.scan_text.insert("1.0", "(没有可识别的文本内容)")
-                    self.scan_status.set("未识别到二维码")
-            else:
-                self.scan_text.insert("1.0", "(没有可识别的文本内容)")
-                self.scan_status.set("未识别到二维码")
-
-        return n
+        if self.shard_pool:
+            res = assemble_frames(list(self.shard_pool.values()))
+            if res["status"] == "partial":
+                self._show_partial(
+                    res["have"], res["total"], res["missing"],
+                    prefix="(本次没有识别到二维码，已保留之前收集的分片)")
+                return "partial"
+        self.scan_text.insert("1.0", "(没有可识别的文本内容)")
+        self.scan_status.set("未识别到二维码")
+        return "none"
 
     def _on_scan_file(self):
         path = filedialog.askopenfilename(

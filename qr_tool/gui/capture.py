@@ -65,6 +65,13 @@ def capture_region(app, owner=None):
         return
     k = tk_to_phys_scale(app.root)
 
+    # 上一次补片时可能解除了从属关系（为了让主窗口压到弹窗上面），
+    # 这里恢复：遮罩与弹窗的层级要回到「弹窗在主窗口之上」
+    if owner is not None and owner.winfo_exists() \
+            and owner.transient() != str(app.root):
+        owner.transient(app.root)
+        owner.lift()
+
     top = tk.Toplevel(app.root)
     top.overrideredirect(True)
     top.attributes("-topmost", True)
@@ -147,6 +154,25 @@ def capture_region(app, owner=None):
     cv.focus_set()
 
 
+def _raise_root_above(owner, root):
+    """把主窗口提到大图弹窗之上
+
+    弹窗是主窗口的 owned window，从属关系还在时就永远压在主窗口上面，
+    所以先临时解除 transient 再 lift 主窗口；下次从弹窗触发截图时会重新挂回，
+    不会留下永久的断裂层级，也不用 -topmost 硬顶。
+    """
+    if owner is None or not owner.winfo_exists():
+        return
+    owner.transient("")
+    root.lift()
+    root.focus_force()
+
+
+def _close_owner(owner):
+    if owner is not None and owner.winfo_exists():
+        owner.destroy()
+
+
 def finish_region(app, px1, py1, px2, py2, owner=None):
     vx, vy, _, _ = virtual_screen()
     try:
@@ -165,6 +191,17 @@ def finish_region(app, px1, py1, px2, py2, owner=None):
 
     app.seg.set("解码器")
     app._show_page(1)
-    if app._scan_image(img) == 0:
+    outcome = app._scan_image(img)
+
+    if outcome == "ok":
+        # 一次收齐：关掉大图弹窗，主窗口回到最前显示还原文本
+        _close_owner(owner)
+        app.root.lift()
+        app.root.focus_force()
+    elif outcome == "partial":
+        # 分片没收齐：弹窗留着继续补片，但要把主窗口提到它之上，
+        # 否则「已收集 x/y · 缺 …」和补图提示会被弹窗挡住
+        _raise_root_above(owner, app.root)
+    elif outcome == "none":
         messagebox.showinfo("提示", "未识别到二维码，请重新框选",
                             parent=owner or app.root)
