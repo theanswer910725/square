@@ -5,7 +5,7 @@
   <img src="https://img.shields.io/badge/Build-passing-2EA043?labelColor=3A3A3A" alt="Build passing" height="20">
   <img src="https://img.shields.io/badge/License-MIT-1F6FBF?labelColor=3A3A3A" alt="License MIT" height="20">
   <img src="https://img.shields.io/badge/UI-CustomTkinter-8957E5?labelColor=3A3A3A" alt="UI CustomTkinter" height="20">
-  <img src="https://img.shields.io/badge/Version-1.0.0-C9A227?labelColor=3A3A3A" alt="Version 1.0.0" height="20">
+  <img src="https://img.shields.io/badge/Version-1.1.0-C9A227?labelColor=3A3A3A" alt="Version 1.1.0" height="20">
 </p>
 
 > 方寸之间，藏尽千言
@@ -16,7 +16,7 @@
 
 ### 生成
 
-- **长文本自动分片**：内容放不进单个码时，按当前纠错率与清晰度切分为多片，每片带 20 字符协议帧头（总片数、片号、原始字节数、压缩标记），可在多张图之间按片号重组。
+- **长文本自动分片**：内容放不进单个码时，按当前纠错率与清晰度切分为多片，每片带 24 字符协议帧头（v2：17 字节二进制，含总片数、片号、原始字节数、压缩标记与整条内容 CRC32），可在多张图之间按片号重组。
 - **四种编码策略**：
 
   | 策略 | 实际行为 | 适用场景 |
@@ -27,7 +27,7 @@
   | 压缩+分片 | 先对 UTF-8 字节做 zlib 压缩，再 base64 分片，片段带压缩标记 | 长文本、重复度高的文本，能明显减少片数 |
 
 - **纠错率四档**：最低（L，约 7%）、中等（M，约 15%，默认）、较高（Q，约 25%）、最高（H，约 30%）。版本 40、byte 模式下的单码容量分别为 2953 / 2331 / 1663 / 1273 字节。
-- **清晰度四档**：紧凑 / 平衡 / 清晰 / 最清晰，对应每片整帧上限 1700 / 1300 / 1000 / 750 字符。上限越大分片越少、单码模块越密；实际生效值为 `min(档位上限, 当前纠错率单码容量 - 20 字符帧头)`，参数区会提示被容量压低后的实际值。
+- **清晰度四档**：紧凑 / 平衡 / 清晰 / 最清晰，对应每片整帧上限 1700 / 1300 / 1000 / 750 字符。上限越大分片越少、单码模块越密；实际生效值为 `min(档位上限, 当前纠错率单码容量 - 24 字符帧头)`，参数区会提示被容量压低后的实际值。
 - **保存二维码**：把当前所有分片按每行最多 4 张拼成一张 PNG 保存，默认文件名 `qrcode.png`。
 - **大图预览**：点击预览区打开弹窗，缩放范围 5%–200%，支持滑杆、鼠标滚轮与「适应窗口」，图片超出视口时自动显示滚动条。
 
@@ -43,7 +43,17 @@
 
 - **压缩+分片生成的码只有本软件能还原**：通用扫码器读到的是 base64 编码字符串（含协议帧头），不是原始文本。选择该策略时参数区会直接提示。
 - **短文本一律生成标准二维码**：代码中显式禁用了 Micro QR。Micro QR 不被 pyzbar / zbar 识别，通用扫码器同样读不出，会把短内容的可用性直接毁掉。
+- **纯文本单码声明 ECI 26（UTF-8）**：不带 ECI 标记时，扫码端只能猜载荷编码；zbar 在中文 UTF-8 恰好也是合法 Shift-JIS 时会按 SJIS 解读，扫出「蜀ｻ蟷ｲ…」式乱码。生成时显式写入 ECI（UTF-8 设计符）后，两端都按 UTF-8 读取。纯 ASCII 内容 segno 不会写入 ECI，单码容量不受影响。
+- **分片帧头升级到 v2**：17 字节二进制（转成 24 字符 base64 前缀），在原 v1 的总片数、片号、原始字节数、压缩标记之外增加整条内容的 CRC32。分片来自不同消息、但总片数与字节数恰好相同时，v1 会在按片号覆盖后拼出错误内容，v2 则在重组时直接判定「内容校验不通过」并拒绝。v1 旧分片码（20 字符帧头）仍可正常读取。
 - 分片拼图建议交给本软件识别；通用扫码器对整张拼图通常只能读到其中个别码。
+
+## 直接下载使用
+
+不想装 Python 的话，直接取打包好的单文件程序：
+
+- 下载地址：<https://github.com/theanswer910725/square/releases>（当前版本 **v1.1.0**，资产名 `Square.exe`）
+- Windows 单文件，无需安装 Python；双击即用，产物约 25.6 MiB
+- **目标机需已安装 [VC++ 2013 x64 运行库](https://aka.ms/highdpimfc2013x64chs)**（提供 `MSVCR120.dll`）。缺失该运行库时程序仍可启动并生成二维码，但**解码功能不可用**——`libzbar-64.dll` 静态依赖它
 
 ## 环境要求
 
@@ -65,6 +75,23 @@ python main.py
 ```
 
 窗口标题为「方寸 · Square」，顶部可在「生成器」与「解码器」之间切换。
+
+## 测试
+
+回归用例在 `tests/test_qr_encoding.py`，不依赖 pytest，直接运行：
+
+```bash
+python tests/test_qr_encoding.py
+```
+
+覆盖内容：
+
+- **用户乱码案例**：报告中的「冻干粉大富大贵」长短行交替文本（510 字符）走 core 层单码往返，自动策略必须选中 `single-plain`，扫码还原后逐字一致
+- **GUI 层同一条链路**：真实窗口输入该文本 → 生成 → 对预览拼图识别 → 还原，逐字一致（需要显示环境）
+- **中文长文本三策略**：约 3000 字符的中文长文本分别走自动 / 强制分片 / 压缩+分片，全部往返一致（分片路径会真实走一遍帧头与 CRC 校验）
+- **ASCII 与中英混排**：确认声明 ECI 后原有内容与单码容量都不受影响
+
+用例直接用 pyzbar 扫描渲染出的 PNG，走的是与真实使用相同的「编码 → 扫码 → 解码」链路；末尾输出 `N PASS / N FAIL`，有失败时退出码非 0。
 
 ## 打包
 
@@ -93,13 +120,17 @@ python -m PyInstaller --noconfirm square.spec
 
 - **保留** WebP（文件对话框允许「所有文件」，去掉会导致 .webp 打不开）、numpy（密集切块的图像分析）、PIL、pyzbar 的 `libzbar-64.dll` / `libiconv.dll`，以及 customtkinter 的主题 json 与字体资源。
 - 不使用 UPX 或其它加壳手段。
-- `square.spec` 与 `build_exe.bat` 为本地构建用文件，未纳入版本库。
+- `square.spec` 与 `build_exe.bat` 均已在版本库内，可直接复用，无需自己重写打包配置。
 
 ## 目录结构
 
 ```text
 main.py                 启动入口，调用 square.gui.run
 requirements.txt        运行依赖
+build_exe.bat           一键打包（清 build/dist → PyInstaller）
+square.spec             PyInstaller 打包配置（onefile、无控制台、排除项）
+tests/
+  test_qr_encoding.py   中文二维码回归：单码 ECI 与三种分片策略往返
 square/
   __init__.py
   core/                 纯逻辑层，不依赖 Tk
