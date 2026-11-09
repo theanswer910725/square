@@ -746,7 +746,11 @@ class SquareApp:
                 frames = parse_frames(raw_strings)
 
         if frames:
-            sig = (frames[0]["total"], frames[0]["orig_len"], frames[0]["flags"])
+            # 批次指纹带上版本与整条内容 CRC：两条字节数恰好相同的不同消息
+            # 也会被判为换了数据，旧池作废，不会互相覆盖出错误拼接
+            sig = (frames[0].get("version"), frames[0]["total"],
+                   frames[0]["orig_len"], frames[0].get("crc"),
+                   frames[0]["flags"])
             if self.shard_sig is not None and self.shard_sig != sig:
                 self.shard_pool.clear()     # 换了一组数据，旧池作废
             self.shard_sig = sig
@@ -770,8 +774,22 @@ class SquareApp:
             return "ok"
 
         if status == "partial":
+            reason = result.get("reason", "")
+            if reason and not result.get("missing"):
+                # 片数齐了但内容对不上（CRC/解压/编码失败）：明确指出原因，
+                # 不能显示成「已收集 N/N、缺 0 片」那种看起来成功的进度
+                self.scan_status.set(reason)
+                self.scan_text.delete("1.0", "end")
+                self.scan_text.insert(
+                    "1.0",
+                    f"{reason}。\n\n"
+                    f"通常是不同文本的二维码被混在一起识别了。"
+                    f"请点击「清空收集」，再只扫同一批分片。")
+                self.btn_clear_pool.grid()
+                return "partial"
             self._show_partial(result["have"], result["total"],
-                               result["missing"])
+                               result["missing"],
+                               prefix=f"（{reason}）" if reason else "")
             return "partial"
 
         if status == "raw":

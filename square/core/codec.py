@@ -5,9 +5,14 @@ import zlib
 
 import segno
 
-MAGIC = b"QRC\x01"
-HEADER_SIZE_B64 = 20
-HEADER_SIZE_BIN = 13
+# 帧头版本（第 4 字节）：v2 增加 4 字节整条内容 CRC32，用来识破
+# 「不同消息的分片被混在一起」。v1 只读兼容，写出的一律是 v2。
+MAGIC = b"QRC\x02"                 # 新格式：17 字节头 → base64 24 字符
+MAGIC_LEGACY = b"QRC\x01"          # 旧格式：13 字节头 → base64 20 字符（仅读）
+HEADER_SIZE_B64 = 24
+HEADER_SIZE_BIN = 17
+HEADER_SIZE_B64_LEGACY = 20
+HEADER_SIZE_BIN_LEGACY = 13
 FLAG_COMPRESSED = 0x01
 
 # 版本 40、byte 模式下的单码容量（字节）。分片载荷是 base64 纯 ASCII，
@@ -35,7 +40,7 @@ def single_capacity(error="L"):
 
 
 def part_capacity_chars(error="L"):
-    """一片载荷里能放的数据字符数：单码容量扣掉 20 字符协议帧头"""
+    """一片载荷里能放的数据字符数：单码容量扣掉 24 字符协议帧头"""
     return single_capacity(error) - HEADER_SIZE_B64
 
 
@@ -84,6 +89,10 @@ def encode(text, compressed=False, max_b64_len=1600, error="L",
             pass  # 塞不下，继续走分片流程
 
     raw = zlib.compress(text.encode("utf-8")) if compressed else text.encode("utf-8")
+    # 校验和覆盖「整条原始内容」（压缩前、base64 前的 UTF-8 字节），
+    # 不是单片数据：只有这样 A[0] + B[1:] 这种混拼才会在 assemble 时被查出来
+    content = text.encode("utf-8")
+    crc = zlib.crc32(content) & 0xFFFFFFFF
     full_b64 = _b64e(raw)
     limit = effective_part_limit(max_b64_len, error)
     data_per_part = limit - HEADER_SIZE_B64
@@ -92,7 +101,8 @@ def encode(text, compressed=False, max_b64_len=1600, error="L",
     parts = []
     for i in range(total):
         flags = FLAG_COMPRESSED if compressed else 0
-        bin_hdr = MAGIC + bytes([flags]) + struct.pack(">HH", total, i) + struct.pack(">I", len(raw))
+        bin_hdr = (MAGIC + bytes([flags]) + struct.pack(">HH", total, i)
+                   + struct.pack(">I", len(raw)) + struct.pack(">I", crc))
         chunk = full_b64[i * data_per_part : (i + 1) * data_per_part]
         parts.append(_b64e(bin_hdr) + chunk)
 
@@ -102,55 +112,103 @@ def encode(text, compressed=False, max_b64_len=1600, error="L",
             "frames_used": total, "part_limit": limit, **info}
 
 
+def _parse_one(s):
+    """单个字符串 → 帧 dict；不是帧就返回 None
+
+    先按 v2（24 字符头）试，再按 v1（20 字符头）试，老码保持可读。
+    v1 没有 crc 字段（crc=None），读得到就照旧规则还原。
+    """
+    for size, magic, version, legacy in (
+            (HEADER_SIZE_B64, MAGIC, 2, False),
+            (HEADER_SIZE_B64_LEGACY, MAGIC_LEGACY, 1, True)):
+        try:
+            hdr = _b64d(s[:size])
+        except Exception:
+            continue
+        if not hdr.startswith(magic):
+            continue
+        need = HEADER_SIZE_BIN_LEGACY if legacy else HEADER_SIZE_BIN
+        if len(hdr) < need:
+            continue
+        try:
+            total, index = struct.unpack(">HH", hdr[5:9])
+            orig_len = struct.unpack(">I", hdr[9:13])[0]
+            crc = None if legacy else struct.unpack(">I", hdr[13:17])[0]
+        except Exception:
+            continue
+        return {"version": version, "flags": hdr[4], "total": total,
+                "index": index, "orig_len": orig_len, "crc": crc,
+                "header_len": size, "b64": s[size:], "payload": s}
+    return None
+
+
 def parse_frames(strings):
-    """从解码出的字符串里挑出带协议帧头的分片"""
+    """从解码出的字符串里挑出带协议帧头的分片（v2 与 v1 都认）"""
     frames = []
     for s in strings:
-        try:
-            hdr = _b64d(s[:HEADER_SIZE_B64])
-        except Exception:
-            continue
-        if not hdr.startswith(MAGIC):
-            continue
-        try:
-            frames.append({
-                "flags": hdr[4],
-                "total": struct.unpack(">H", hdr[5:7])[0],
-                "index": struct.unpack(">H", hdr[7:9])[0],
-                "orig_len": struct.unpack(">I", hdr[9:13])[0],
-                "b64": s[HEADER_SIZE_B64:],
-                "payload": s,
-            })
-        except Exception:
-            continue
+        f = _parse_one(s)
+        if f:
+            frames.append(f)
     return frames
 
 
+def _batch_key(f):
+    """同一批分片的特征：版本 + 总片数 + 原始长度 + 整条内容 CRC
+
+    crc 是关键：两条字节数恰好相同的不同消息，靠它才能分成两批，
+    不会在 by_index 里互相覆盖。
+    """
+    return (f.get("version", 1), f["total"], f["orig_len"], f.get("crc"))
+
+
 def assemble_frames(frames):
-    """按片号索引重组（帧可以来自不同次截图/不同图片）"""
+    """按片号索引重组（帧可以来自不同次截图/不同图片）
+
+    混入其他消息的分片时：按片数最多的那批继续，缺片照常报 partial；
+    即使凑齐了，CRC 校验也会把「内容对不上」的拼装拒掉。
+    """
     if not frames:
         return {"status": "empty"}
-    total = frames[0]["total"]
-    compressed = bool(frames[0]["flags"] & FLAG_COMPRESSED)
-    by_index = {}
+
+    groups = {}
     for f in frames:
-        if f["total"] == total:
+        groups.setdefault(_batch_key(f), []).append(f)
+    # 片数最多的那一批为主，同数量取最先出现的；其余批次视为误入
+    group = max(groups.values(), key=len)
+    total = group[0]["total"]
+    compressed = bool(group[0]["flags"] & FLAG_COMPRESSED)
+    crc = group[0].get("crc")
+
+    by_index = {}
+    for f in group:
+        if 0 <= f["index"] < total:
             by_index[f["index"]] = f
 
     missing = [i for i in range(total) if i not in by_index]
+    mixed = len(groups) > 1
     if missing:
-        return {"status": "partial", "total": total, "have": len(by_index),
-                "missing": missing}
+        out = {"status": "partial", "total": total, "have": len(by_index),
+               "missing": missing}
+        if mixed:
+            out["reason"] = "混入了其他内容的分片"
+        return out
 
     full_b64 = "".join(by_index[i]["b64"] for i in range(total))
     try:
         raw = _b64d(full_b64)
-        text = zlib.decompress(raw).decode("utf-8") if compressed \
-            else raw.decode("utf-8")
-        return {"status": "ok", "text": text}
+        content = zlib.decompress(raw) if compressed else raw
     except Exception:
         return {"status": "partial", "total": total, "have": len(by_index),
-                "missing": missing}
+                "missing": [], "reason": "内容损坏：base64 或解压失败"}
+
+    if crc is not None and (zlib.crc32(content) & 0xFFFFFFFF) != crc:
+        return {"status": "partial", "total": total, "have": len(by_index),
+                "missing": [], "reason": "内容校验不通过：分片来自不同消息"}
+    try:
+        return {"status": "ok", "text": content.decode("utf-8")}
+    except Exception:
+        return {"status": "partial", "total": total, "have": len(by_index),
+                "missing": [], "reason": "内容损坏：不是合法的 UTF-8 文本"}
 
 
 def decode_strings(strings):
