@@ -109,13 +109,14 @@ class SelectBox(tk.Canvas):
     _PAD = 4            # 菜单内边距（逻辑像素）
 
     def __init__(self, master, variable, values, font=None, height=30,
-                 surface=CARD, command=None):
+                 width=210, surface=CARD, command=None):
         try:
             dpi = master.winfo_fpixels("1i") / 96.0
         except Exception:
             dpi = 1.0
         self._dpi = dpi
-        super().__init__(master, height=int(round(height * dpi)), bd=0,
+        super().__init__(master, width=int(round(width * dpi)),
+                         height=int(round(height * dpi)), bd=0,
                          highlightthickness=0, bg=surface, takefocus=True)
         self._var = variable
         self._values = list(values)

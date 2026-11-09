@@ -48,5 +48,7 @@ OVERLAY_FG = "#ffffff"
 
 # ---- 尺寸与字体 ----
 RADIUS = 8
-FONT_STACK = ("Segoe UI Variable Text", "Segoe UI",
-              "Microsoft YaHei UI", "Microsoft YaHei")
+# 界面统一用微软雅黑：Segoe UI 系列不含 CJK 字形，中文只能靠系统 font linking
+# 兜底，实际命中的中文字面不可控，中英混排时字形/字重也和雅黑不一致
+FONT_STACK = ("Microsoft YaHei UI", "Microsoft YaHei",
+              "Segoe UI Variable Text", "Segoe UI")

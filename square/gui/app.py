@@ -57,6 +57,14 @@ DEFAULT_ERROR = "中等（约 15% 可恢复）"
 DEFAULT_QUALITY = "清晰（分片多，码易识别）"
 DEFAULT_STRATEGY = "自动（推荐）"
 
+# 窗口逻辑尺寸（DIP，1 逻辑像素 = 1/96 英寸）。CustomTkinter 会按 window scaling
+# 换算成物理像素，这里不要再乘 DPI。当前值在 1536×864@125% 下约合
+# 客户区 620×420 逻辑像素（外框约 635×462），是原来 775×525 的 0.8 倍
+DEFAULT_SIZE = (620, 420)
+# 最小尺寸同比缩放（原 700×475 × 0.8）。minsize 不能高于 geometry，
+# 否则 Tk 会把窗口顶回 minsize，实际尺寸就不是 DEFAULT_SIZE 了
+MIN_SIZE = (560, 380)
+
 
 def format_bytes(n):
     """字节数 → 人类可读：不足 1KB 用「字节」，否则按 1024 进位 KB / MB"""
@@ -110,13 +118,16 @@ class SquareApp:
         self.root = root
         root.title("方寸 · Square")
 
-        # 按系统 DPI 换算，保持观感一致（左右两栏：预览 + 整列文本输入）
+        # CustomTkinter 的 geometry()/minsize() 内部会按 window scaling 把逻辑像素
+        # 换算成物理像素（本机 125%），所以这里传逻辑像素即可。
+        # 之前又自己乘了一次 DPI，导致缩放叠加两次、窗口比预期大 25%。
         scale = root.winfo_fpixels("1i") / 96.0
-        w, h = int(720 * scale), int(580 * scale)
-        w = min(w, root.winfo_screenwidth() - 40)
-        h = min(h, root.winfo_screenheight() - 80)
+        screen_w = int(root.winfo_screenwidth() / scale)
+        screen_h = int(root.winfo_screenheight() / scale)
+        w = min(DEFAULT_SIZE[0], screen_w - 40)
+        h = min(DEFAULT_SIZE[1], screen_h - 80)
         root.geometry(f"{w}x{h}")
-        root.minsize(int(660 * scale), int(520 * scale))
+        root.minsize(*MIN_SIZE)
         root.configure(fg_color=BG)
 
         # 状态
@@ -146,20 +157,28 @@ class SquareApp:
         for child in self.root.winfo_children():
             child.destroy()
 
-        # 顶部分段切换
+        # 顶部分段切换：只占中间一段固定宽度并居中，不横贯整宽。
+        # 原来 fill="x" 把两个选项拉到窗口两端，视觉上像一条宽横条。
+        # CTkSegmentedButton 默认 dynamic_resizing=True 会用两个按钮的
+        # 请求宽度（约 122 逻辑像素）反算自身宽度、无视 width 参数，
+        # 必须关掉它，width 才真正生效
         self.seg = ctk.CTkSegmentedButton(
             self.root, values=["生成器", "解码器"],
             command=self._on_seg_change,
-            font=self.f_ui, height=30, corner_radius=RADIUS,
+            font=self.f_ui, width=240, height=26, corner_radius=RADIUS,
+            dynamic_resizing=False,
             fg_color=TRACK, selected_color=CARD, selected_hover_color=CARD,
             unselected_color=TRACK, unselected_hover_color=TRACK_HOVER,
             text_color=MUTED, text_color_disabled=TEXT_DISABLED)
-        self.seg.pack(fill="x", padx=12, pady=(10, 0))
+        # 顶部只留最小呼吸位（4），下方内容区同样 4：原来 8/8 会在标题栏和
+        # 分段按钮之间留出一条约 10px 的全宽空白带（用户圈出的那块）。
+        # 再小控制就会贴住标题栏，故以此为下限
+        self.seg.pack(pady=(4, 0))
         self.seg.set("生成器")
 
         # 页面容器
         self.content = ctk.CTkFrame(self.root, fg_color="transparent")
-        self.content.pack(fill="both", expand=True, padx=12, pady=(8, 10))
+        self.content.pack(fill="both", expand=True, padx=12, pady=(4, 10))
         self.content.grid_columnconfigure(0, weight=1)
         self.content.grid_rowconfigure(0, weight=1)
 
@@ -181,14 +200,17 @@ class SquareApp:
         page = ctk.CTkFrame(self.content, fg_color="transparent")
         page.grid(row=0, column=0, sticky="nsew")
         self.gen_page = page
-        page.grid_columnconfigure(0, weight=1)
-        page.grid_columnconfigure(1, weight=0, minsize=290)
+        # 左右两列等宽：uniform 让两列在任何窗口宽度下都严格等分，
+        # 不依赖内容请求宽度，放大/缩小都同步。minsize 物理像素（原 290×0.8）
+        page.grid_columnconfigure(0, weight=1, minsize=232, uniform="cols")
+        page.grid_columnconfigure(1, weight=1, minsize=232, uniform="cols")
         page.grid_rowconfigure(0, weight=1)
 
         # ---- 左：预览 + 参数 + 操作 ----
         left = ctk.CTkFrame(page, fg_color=CARD, corner_radius=RADIUS,
                             border_width=1, border_color=BORDER)
-        left.grid(row=0, column=0, sticky="nsew", padx=(0, 8))
+        # 两列之间的 8px 间距左右各分 4px，保证两张卡片本体宽度严格相等
+        left.grid(row=0, column=0, sticky="nsew", padx=(0, 4))
         left.grid_columnconfigure(0, weight=1)
         left.grid_rowconfigure(1, weight=1)
 
@@ -213,7 +235,9 @@ class SquareApp:
         preview_wrap.grid_columnconfigure(0, weight=1)
         preview_wrap.grid_rowconfigure(0, weight=1)
 
-        self.preview_canvas = tk.Canvas(preview_wrap, bg=SURFACE, height=120, bd=0,
+        # 画布请求尺寸（物理像素）同比 0.8，避免它把列请求宽度顶大
+        self.preview_canvas = tk.Canvas(preview_wrap, bg=SURFACE, height=96,
+                                        width=240, bd=0,
                                         highlightthickness=1,
                                         highlightbackground=BORDER)
         self.preview_canvas.grid(row=0, column=0, sticky="nsew")
@@ -236,7 +260,7 @@ class SquareApp:
         ctk.CTkLabel(box, text="正在生成…", font=self.f_bold,
                      text_color=MUTED).pack(pady=(0, 8))
         self.loading_bar = ctk.CTkProgressBar(
-            box, width=170, height=6, corner_radius=3, mode="indeterminate",
+            box, width=136, height=6, corner_radius=3, mode="indeterminate",
             indeterminate_speed=1.6, fg_color=TRACK, progress_color=ACCENT)
         self.loading_bar.pack()
         self.loading_bar.set(0)
@@ -253,7 +277,8 @@ class SquareApp:
             的是 button_color 而不是 border_color，外框包一层也会被它压断。
             """
             SelectBox(params, variable=variable, values=values,
-                      font=self.f_sm, height=30, surface=CARD).grid(
+                      font=self.f_sm, height=30, width=168,
+                      surface=CARD).grid(
                 row=row, column=1, sticky="ew", pady=2)
 
         ctk.CTkLabel(params, text="纠错率", font=self.f_sm,
@@ -279,7 +304,7 @@ class SquareApp:
         dpi = self.root.winfo_fpixels("1i") / 96.0
         self.param_hint = ctk.CTkLabel(
             params, text="", font=self.f_xs, text_color=MUTED,
-            anchor="w", justify="left", wraplength=int(380 * dpi))
+            anchor="w", justify="left", wraplength=int(304 * dpi))
         # 文案较长（压缩说明、容量受限说明）时按实际可用宽度折行，
         # 避免被标签宽度裁掉后半句
         self.param_hint.bind(
@@ -295,6 +320,8 @@ class SquareApp:
         self._update_param_hint()
 
         # ---- 主操作 ----
+        # CTkButton 默认 width=140 逻辑像素，两颗并排会把整列请求宽度顶到 387，
+        # 超过 620 宽窗口实际分到的 368，故按 0.8 收到 112（布局时按权重拉伸）
         btns = ctk.CTkFrame(left, fg_color="transparent")
         btns.grid(row=3, column=0, sticky="ew", padx=12, pady=(8, 12))
         btns.grid_columnconfigure(0, weight=3)
@@ -302,12 +329,12 @@ class SquareApp:
 
         self.btn_generate = ctk.CTkButton(
             btns, text="生成二维码", command=self._on_generate,
-            font=self.f_bold, height=32, corner_radius=RADIUS,
+            font=self.f_bold, height=32, width=112, corner_radius=RADIUS,
             fg_color=ACCENT, hover_color=ACCENT_HOVER,
             text_color=ON_ACCENT, text_color_disabled=ON_ACCENT)
         self.btn_generate.grid(row=0, column=0, sticky="ew", padx=(0, 6))
         ctk.CTkButton(btns, text="保存二维码", command=self._on_save_image,
-                      font=self.f_sm, height=32, corner_radius=RADIUS,
+                      font=self.f_sm, height=32, width=112, corner_radius=RADIUS,
                       fg_color=BTN, hover_color=BTN_HOVER,
                       text_color=TEXT, border_width=1,
                       border_color=BORDER).grid(
@@ -316,7 +343,7 @@ class SquareApp:
         # ---- 右：文本输入（整列占满高度）----
         right = ctk.CTkFrame(page, fg_color=CARD, corner_radius=RADIUS,
                              border_width=1, border_color=BORDER)
-        right.grid(row=0, column=1, sticky="nsew")
+        right.grid(row=0, column=1, sticky="nsew", padx=(4, 0))
         right.grid_columnconfigure(0, weight=1)
         right.grid_rowconfigure(1, weight=1)
 
@@ -387,7 +414,7 @@ class SquareApp:
             btn.grid(row=0, column=col, padx=(0, 4) if col <= 3 else 0)
             self._status_btns.append(btn)
 
-        self.scan_canvas = tk.Canvas(page, bg=SURFACE, height=120, bd=0,
+        self.scan_canvas = tk.Canvas(page, bg=SURFACE, height=96, bd=0,
                                      highlightthickness=1,
                                      highlightbackground=BORDER)
         self.scan_canvas.grid(row=1, column=0, sticky="nsew", padx=12)
@@ -403,7 +430,7 @@ class SquareApp:
                           self.scan_text.get("1.0", "end"))).pack(side="right")
 
         self.scan_text = ctk.CTkTextbox(
-            page, height=100, font=self.f_ui, wrap="word",
+            page, height=80, font=self.f_ui, wrap="word",
             fg_color=FIELD, border_width=1, border_color=BORDER,
             corner_radius=RADIUS, text_color=TEXT,
             scrollbar_button_color=SCROLL_THUMB,
