@@ -34,6 +34,18 @@ def _b64e(d): return base64.b64encode(d).decode("ascii")
 def _b64d(s): return base64.b64decode(s)
 
 
+def _make_plain(text, error):
+    """纯文本单码：带 ECI（UTF-8）设计符生成。
+
+    不加 ECI 时，扫描端对无标记的字节模式载荷只能靠猜：zbar（pyzbar）
+    在载荷「恰好也是合法 SJIS」时按 SJIS 解读，纯中文 UTF-8（如
+    「冻干粉大富大贵」）会被转成「蜀ｻ蟷ｲ…」式乱码——乱码在扫描端
+    就已经产生，解码侧无法根因性挽回。显式 ECI 26 让两端都按 UTF-8 读。
+    分片载荷是 base64 纯 ASCII，不受猜测影响，不需要 ECI。
+    """
+    return segno.make(text, error=error, micro=False, eci=True)
+
+
 def single_capacity(error="L"):
     """单码在指定纠错率下的最大字节数（byte 模式，版本 40）"""
     return SINGLE_CAPACITY.get(error, SINGLE_CAPACITY["L"])
@@ -54,7 +66,7 @@ def fits_single(text, error="L"):
     try:
         # 一律生成标准 QR：Micro QR 不被 pyzbar / zbar 识别，
         # 通用扫码器同样读不出，会把短内容的可用性直接毁掉
-        segno.make(text, error=error, micro=False)
+        _make_plain(text, error)
         return True
     except segno.encoder.DataOverflowError:
         return False
@@ -72,7 +84,7 @@ def encode(text, compressed=False, max_b64_len=1600, error="L",
 
     if single_only:
         try:
-            qr = segno.make(text, error=error, micro=False)
+            qr = _make_plain(text, error)
         except segno.encoder.DataOverflowError:
             raise SingleOverflow(info["original_bytes"],
                                  single_capacity(error), error) from None
@@ -82,7 +94,7 @@ def encode(text, compressed=False, max_b64_len=1600, error="L",
     # 纯文本单码：整段直接编，不加帧头；分片策略会跳过这一步
     if prefer_single and not compressed:
         try:
-            qr = segno.make(text, error=error, micro=False)
+            qr = _make_plain(text, error)
             return {"strategy": "single-plain", "qrs": [qr], "total_parts": 1,
                     "compressed": False, "frames_used": 0, **info}
         except segno.encoder.DataOverflowError:

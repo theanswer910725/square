@@ -47,7 +47,7 @@
 
 ## 环境要求
 
-- **Python 3.12**
+- **Python 3.12+**（开发、回归与打包均在 3.13.8 上实测通过）
 - **Windows**：剪贴板图片写入（CF_DIB）、虚拟桌面/多显示器截图、DPI 坐标换算均直接调用 Win32 API，不支持 macOS / Linux。
 - 依赖（见 `requirements.txt`）：
   - `customtkinter>=5.2.2`
@@ -55,7 +55,7 @@
   - `segno>=1.6.0`
   - `pyzbar>=0.1.9`
   - `numpy>=1.24`
-- pyzbar 在 Windows 上通过 ctypes 加载包内自带的 `libzbar-64.dll` 与 `libiconv.dll`，无需另行安装 zbar。
+- pyzbar 在 Windows 上通过 ctypes 加载包内自带的 `libzbar-64.dll` 与 `libiconv.dll`，无需另行安装 zbar。但 `libzbar-64.dll` 还静态依赖 **`MSVCR120.dll`（Visual C++ 2013 运行库）**：目标机器需已安装 [vcredist 2013 x64](https://aka.ms/highdpimfc2013x64chs)，否则解码功能不可用（生成不受影响）。该 DLL 属于系统运行库，不随包分发。
 
 ## 运行
 
@@ -80,7 +80,7 @@ build_exe.bat
 python -m PyInstaller --noconfirm square.spec
 ```
 
-- 实测产物约 **25 MiB**，首次启动约 **3–4 秒**（onefile 先自解压到临时目录），之后启动时间相近。
+- 实测产物约 **25.6 MiB**，启动约 **3.5 秒**（热启）/ 约 6 秒（冷启，onefile 先自解压到临时目录）。
 - `square.spec` 中的排除项均经启动、生成、保存、两条解码路径与截图识别回归确认：
 
   | 排除项 | 原因 | 省下体积 |
