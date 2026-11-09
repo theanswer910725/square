@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="docs/logo/logo.png" alt="方寸 · Square" width="360">
+</p>
+
 # 方寸 · Square
 
 <p>
