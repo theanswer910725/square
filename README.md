@@ -55,21 +55,22 @@
 
 不想装 Python 的话，直接取打包好的单文件程序：
 
-- 下载地址：<https://github.com/theanswer910725/square/releases>（当前版本 **v1.1.0**，资产名 `Square.exe`）
-- Windows 单文件，无需安装 Python；双击即用，产物约 25.6 MiB
-- **目标机需已安装 [VC++ 2013 x64 运行库](https://aka.ms/highdpimfc2013x64chs)**（提供 `MSVCR120.dll`）。缺失该运行库时程序仍可启动并生成二维码，但**解码功能不可用**——`libzbar-64.dll` 静态依赖它
+- 下载地址：<https://github.com/theanswer910725/square/releases>（当前版本 **v1.1.0**）
+- 两个资产，按目标系统选择：
+  - `Square.exe`：Windows 10 / 11 x64，约 25.6 MiB
+  - `Square-Win7.exe`：Windows 7 SP1（x64 / x86 均可），需系统已装 KB2999226（通用 C 运行库）。该线基于已停止维护的 Python 3.8，仅作兼容维护，不再跟进安全更新
+- Windows 单文件，无需安装 Python，双击即用
+- **建议安装 [VC++ 2013 运行库](https://aka.ms/highdpimfc2013x64chs)**（提供 `MSVCR120.dll`）：解码依赖的 `libzbar` 静态依赖它。打包流程通常已把该 DLL 收进包内，缺失时程序仍可启动并生成二维码，但**解码功能不可用**
 
 ## 环境要求
 
-- **Python 3.12+**（开发、回归与打包均在 3.13.8 上实测通过）
+- **Python 3.13**（开发、回归与打包均在 3.13.8 上实测通过）；Windows 7 兼容线用 **Python 3.8**
 - **Windows**：剪贴板图片写入（CF_DIB）、虚拟桌面/多显示器截图、DPI 坐标换算均直接调用 Win32 API，不支持 macOS / Linux。
-- 依赖（见 `requirements.txt`）：
-  - `customtkinter>=5.2.2`
-  - `pillow>=10.0.0`
-  - `segno>=1.6.0`
-  - `pyzbar>=0.1.9`
-  - `numpy>=1.24`
-- pyzbar 在 Windows 上通过 ctypes 加载包内自带的 `libzbar-64.dll` 与 `libiconv.dll`，无需另行安装 zbar。但 `libzbar-64.dll` 还静态依赖 **`MSVCR120.dll`（Visual C++ 2013 运行库）**：目标机器需已安装 [vcredist 2013 x64](https://aka.ms/highdpimfc2013x64chs)，否则解码功能不可用（生成不受影响）。该 DLL 属于系统运行库，不随包分发。
+- 依赖按线锁定版本，不用 `>=`（避免重建时漂移）：
+  - 现代系统线 `requirements.txt`：`customtkinter==6.0.0`、`pillow==12.0.0`、`numpy==2.2.6`、`segno==1.6.6`、`pyzbar==0.1.9`
+  - Windows 7 线 `requirements-win7.txt`：`pillow==10.4.0`、`numpy==1.24.4`，其余同上，另加 `pyinstaller==5.13.2`
+  - 双线方案与版本依据见 `docs/win7-support-plan.md`
+- pyzbar 在 Windows 上通过 ctypes 加载包内自带的 `libzbar-64.dll`（32 位构建为 `libzbar-32.dll`）与 `libiconv.dll`，无需另行安装 zbar。`libzbar` 还静态依赖 **`MSVCR120.dll`（Visual C++ 2013 运行库）**：打包时通常已随包收进，若包内缺失则需安装 [vcredist 2013](https://aka.ms/highdpimfc2013x64chs)，否则解码功能不可用（生成不受影响）。
 
 ## 运行
 
@@ -126,13 +127,33 @@ python -m PyInstaller --noconfirm square.spec
 - 不使用 UPX 或其它加壳手段。
 - `square.spec` 与 `build_exe.bat` 均已在版本库内，可直接复用，无需自己重写打包配置。
 
+### Windows 7 兼容线
+
+Python 3.13 的运行时依赖 `api-ms-win-core-path-l1-1-0.dll`（Windows 8 起才有），Win7 上无法启动，因此单开一条 Python 3.8 构建线：
+
+```bat
+build_win7.bat
+```
+
+- 解释器按「命令行参数 → `.venv-win7\Scripts\python.exe` → 已知 3.8 路径」选取，不加入系统 PATH。
+- `square-win7.spec` 剔除 `api-ms-win-*.dll` 与 `ucrtbase.dll`（必须由目标机 OS 提供），并按解释器位宽自动选 `libzbar-32.dll` / `libzbar-64.dll`。
+- 构建结束自动执行 `tools/check_bundle.py` 校验包内容，不通过即中断。
+- 方案、版本依据与验证清单见 `docs/win7-support-plan.md`。
+
 ## 目录结构
 
 ```text
 main.py                 启动入口，调用 square.gui.run
 requirements.txt        运行依赖
+requirements-win7.txt   Windows 7 线依赖（Python 3.8 锁版）
 build_exe.bat           一键打包（清 build/dist → PyInstaller）
 square.spec             PyInstaller 打包配置（onefile、无控制台、排除项）
+build_win7.bat          Windows 7 线打包（PATH 隔离 + 构建后自检）
+square-win7.spec        Windows 7 线打包配置（剔除 Win8+ API set、位宽自适应）
+tools/
+  check_bundle.py       构建后自检：包内不得含 api-ms-win-* / ucrtbase.dll
+docs/
+  win7-support-plan.md  双构建线方案与验证结论
 tests/
   test_qr_encoding.py   中文二维码回归：单码 ECI 与三种分片策略往返
 square/

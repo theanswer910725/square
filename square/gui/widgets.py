@@ -471,16 +471,18 @@ class SelectBox(tk.Canvas):
             except Exception:
                 pass
             self._outside_id = None
-        # 收起不销毁也不 withdraw（withdraw 一次约 25ms）：
-        # 把画布内容全部藏起来，整窗只剩抠色 → 全透明且点击穿透
+        # 收起不销毁：抠色可用时把画布内容全藏起来，整窗只剩哑色 → 全透明且
+        # 点击穿透；抠色不可用（Win7）则 withdraw，见下
         if self._menu_cv is not None:
             try:
                 if self._transparent:
                     self._menu_cv.itemconfigure("all", state="hidden")
-                else:                  # 抠色不可用：退回挪到屏幕外
-                    self._menu.geometry(
-                        f"+{self.winfo_screenwidth() + 2000}"
-                        f"+{self.winfo_screenheight() + 2000}")
+                else:                  # 抠色不可用：直接 withdraw
+                    # 原来是把菜单挪到屏幕外 +2000：窗口仍参与重绘与命中测试，
+                    # 抠色失效时还会在屏幕上留下一块哑色矩形（Win7 实测）。
+                    # withdraw 只在收起时付一次代价，换取彻底不参与绘制；
+                    # 展开时 _menu_pos 已被置空，_open_menu 必定 deiconify
+                    self._menu.withdraw()
                     self._menu_pos = None
             except Exception:
                 pass
