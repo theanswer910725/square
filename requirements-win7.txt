@@ -1,0 +1,18 @@
+# Windows 7 兼容线（Python 3.8，32/64 位均可，见 docs/win7-support-plan.md）。
+#
+# 选版依据：
+#   numpy==1.24.4          最后一个提供 cp38 轮子的版本（1.25 起要求 Python>=3.9）
+#   pillow==10.4.0         最后一个支持 Python 3.8 的版本（11.x 起要求 >=3.9）
+#   customtkinter==6.0.0   与 3.13 线同版本，避免 UI 行为分叉；shcore 硬依赖由
+#                          square/gui/dpi.py 的运行时兜底处理
+#   segno / pyzbar         与 3.13 线同版本，保证二维码位图与解码 DLL 完全一致
+#   pyinstaller==5.13.2    5.x 末版，bootloader 只导入经典系统 DLL，对 Win7 友好
+#   pyinstaller-hooks-contrib==2023.10  与 5.13.2 同期，避免 hook 反向要求新接口
+customtkinter==6.0.0
+pillow==10.4.0
+segno==1.6.6
+pyzbar==0.1.9
+numpy==1.24.4
+
+pyinstaller==5.13.2
+pyinstaller-hooks-contrib==2023.10

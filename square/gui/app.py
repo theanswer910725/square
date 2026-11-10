@@ -1,8 +1,12 @@
 """主窗口：生成器 / 解码器两个页面、预览、加载遮罩与各入口动作。"""
 import ctypes
+import os
 import queue
+import tempfile
 import threading
+import time
 import tkinter as tk
+import traceback
 from tkinter import filedialog, messagebox
 
 import customtkinter as ctk
@@ -14,6 +18,7 @@ from ..core.codec import (assemble_frames, decode_strings,
 from ..core.puzzle import make_puzzle
 from ..core.tiles import as_text, decode_tiles
 from .capture import capture_region
+from .dpi import apply_dpi_awareness, patch_ctk_scaling
 from .preview import open_preview_popup
 from .theme import (ACCENT, ACCENT_HOVER, ACCENT_SOFT, BG, BORDER, BTN,
                     BTN_HOVER, CARD, FIELD, MUTED, ON_ACCENT, RADIUS,
@@ -139,6 +144,11 @@ class SquareApp:
         self._scan_photo_ref = None
         self._busy = False
         self._gen_queue = queue.Queue()
+        # 参数提示的合并调度标记：三个下拉的 trace 会在变量写入时同步触发，
+        # 连着改会来好几次；只置脏一次，真正的刷新留到空闲期（见 _update_param_hint）
+        self._hint_pending = False
+        # 折行宽度的重算依据：上次用过的根窗口物理宽度（变化不足 8px 不重算）
+        self._hint_root_w = 0
         # 分片收集池：index -> frame，来自多次截图/多张图片，按片号去重
         self.shard_pool = {}
         self.shard_sig = None
@@ -151,6 +161,9 @@ class SquareApp:
         self.f_bold = ctk.CTkFont(family=base, size=14, weight="bold")
 
         self._build_ui()
+        # 只在根窗口宽度真正变化时重算折行宽度；_build_ui 可能被重建，
+        # 故绑定放在这里，保证只挂一次
+        self.root.bind("<Configure>", self._on_root_resize, add="+")
 
     # ========== 界面骨架 ==========
     def _build_ui(self):
@@ -300,17 +313,13 @@ class SquareApp:
         add_menu(2, self.var_strategy, STRATEGY_OPTIONS)
 
         # 参数区常驻提示：档位被单码容量压低、压缩码只有本软件能还原。
-        # 用标签而不是弹窗，改下拉时即时更新，不打断操作
-        dpi = self.root.winfo_fpixels("1i") / 96.0
+        # 用标签而不是弹窗，改下拉时即时更新，不打断操作。
+        # 折行宽度只按根窗口宽度推算（见 _hint_wrap），不再从标签自身宽度倒推：
+        # Win7 上「读标签宽度→写 wraplength→宽度又变」会形成极限环，
+        # 188/266 之间每秒震荡 200 次，把主循环占满
         self.param_hint = ctk.CTkLabel(
             params, text="", font=self.f_xs, text_color=MUTED,
-            anchor="w", justify="left", wraplength=int(304 * dpi))
-        # 文案较长（压缩说明、容量受限说明）时按实际可用宽度折行，
-        # 避免被标签宽度裁掉后半句
-        self.param_hint.bind(
-            "<Configure>",
-            lambda e: self.param_hint.configure(
-                wraplength=max(120, e.width - 4)))
+            anchor="w", justify="left", wraplength=self._hint_wrap())
         self.param_hint.grid(row=3, column=0, columnspan=2, sticky="ew",
                              pady=(4, 0))
         self.param_hint.grid_remove()
@@ -448,25 +457,86 @@ class SquareApp:
                 self.text_input.delete("1.0", "end")
                 self.text_input.insert("1.0", f.read())
 
+    # ---------- 提示区折行宽度 ----------
+    def _hint_wrap(self):
+        """提示标签的折行宽度（逻辑像素）
+
+        只由根窗口宽度推算：根窗口有显式 geometry，不会因为子控件的请求
+        宽度而变宽，所以这里与标签自身的分配宽度不构成反馈——原来按
+        ``event.width - 4`` 写回，Win7 上收敛不了，形成 188↔266 的极限环。
+
+        620 逻辑宽时算得 268，与 Win11 实测收敛值 338÷1.251 一致。
+        """
+        try:
+            if not self.root.winfo_ismapped():
+                # 还没映射时 winfo_width() 给的是个偏小的中间值，
+                # 按默认宽度估，避免映射后再纠正一次
+                return 268
+            scale = self.root.winfo_fpixels("1i") / 96.0
+            root_w = self.root.winfo_width() / scale
+        except tk.TclError:
+            return 268
+        card_w = (root_w - 32) / 2        # content padx 12×2 + 两列间距 8
+        # 用 round：620 逻辑宽下算得 267.75，int 会截成 267，
+        # 与构建时按 DEFAULT_SIZE 估的 268 差 1px，白白多写一次
+        return max(160, int(round(card_w - 26)))  # 卡片 padx 12×2 + 边框 2
+
+    def _on_root_resize(self, event):
+        """根窗口宽度变了才重算折行宽度
+
+        子控件的 <Configure> 会经 bindtags 冒到根窗口上，必须用
+        ``event.widget is self.root`` 过滤，否则又变成「任何重排都写一次」。
+        """
+        if event.widget is not self.root:
+            return
+        if abs(event.width - self._hint_root_w) < 8:
+            return
+        self._hint_root_w = event.width
+        try:
+            if int(self.param_hint.cget("wraplength")) != self._hint_wrap():
+                self.param_hint.configure(wraplength=self._hint_wrap())
+        except (tk.TclError, ValueError):
+            pass
+
     def _update_param_hint(self):
-        """参数区提示：档位被容量压低、压缩码的兼容性说明（改下拉即时刷新）"""
-        error_label = self.var_error_label.get()
-        error = ERROR_PARAM[error_label]
-        tier = QUALITY_PART_LIMIT[self.var_quality.get()]
-        limit = effective_part_limit(tier, error)
-        lines = []
-        if limit < tier:
-            lines.append(
-                f"当前纠错率「{error_label}」下单码容量有限，"
-                f"每片上限已由 {tier} 字符降为 {limit} 字符。")
-        if self.var_strategy.get() == STRATEGY_OPTIONS[3]:
-            lines.append("压缩码仅可本软件还原，通用扫码工具读取到的内容为编码字符串非原始文本。")
-        text = "\n".join(lines)
-        if text:
-            self.param_hint.configure(text=text)
-            self.param_hint.grid()
-        else:
-            self.param_hint.grid_remove()
+        """参数区提示：档位被容量压低、压缩码的兼容性说明（改下拉即时刷新）
+
+        trace 回调在变量写入时同步执行，连着改三个下拉会触发多次；
+        这里只置脏标记，把 N 次刷新合并成空闲期的一次。
+        """
+        if self._hint_pending:
+            return
+        self._hint_pending = True
+        self.root.after_idle(self._apply_param_hint)
+
+    def _apply_param_hint(self):
+        """空闲期真正刷新提示文案与可见性
+
+        窗口已销毁（退出过程中的残留调度）时 TclError 直接吞掉；
+        其它异常不再拦，交给 Tk 的 report_callback_exception 落盘。
+        """
+        self._hint_pending = False
+        try:
+            error_label = self.var_error_label.get()
+            error = ERROR_PARAM[error_label]
+            tier = QUALITY_PART_LIMIT[self.var_quality.get()]
+            limit = effective_part_limit(tier, error)
+            lines = []
+            if limit < tier:
+                lines.append(
+                    f"当前纠错率「{error_label}」下单码容量有限，"
+                    f"每片上限已由 {tier} 字符降为 {limit} 字符。")
+            if self.var_strategy.get() == STRATEGY_OPTIONS[3]:
+                lines.append(
+                    "压缩码仅可本软件还原，通用扫码工具读取到的内容为编码字符串非原始文本。")
+            text = "\n".join(lines)
+            if text:
+                self.param_hint.configure(text=text)
+                self.param_hint.grid()
+            else:
+                self.param_hint.grid_remove()
+        except tk.TclError:
+            pass
 
     def _on_generate(self):
         if self._busy:
@@ -535,17 +605,31 @@ class SquareApp:
             return
         if not self._busy:
             return
-        if status == "ok":
-            self._generate_done(payload)
-        else:
-            self._generate_failed(payload)
+        try:
+            if status == "ok":
+                self._generate_done(payload)
+            else:
+                self._generate_failed(payload)
+        except Exception as e:
+            # 收尾动作本身出错：必须先退出 busy 再报错，否则遮罩常驻、
+            # 按钮永久禁用、轮询也不再续期，界面就彻底停在「生成中」
+            try:
+                self._set_busy(False)
+            finally:
+                messagebox.showerror("生成结果处理失败", str(e),
+                                     parent=self.root)
 
     def _generate_done(self, result):
         self.gen_result = result
-        self._render_preview(result)
-        self._set_busy(False)
-        # 换了新文本：清掉上一组收集的分片
-        self._reset_pool()
+        try:
+            self._render_preview(result)
+        except Exception as e:
+            messagebox.showerror("预览渲染失败", str(e), parent=self.root)
+        finally:
+            # 渲染失败也必须退出 busy，理由同 _poll_generate
+            self._set_busy(False)
+            # 换了新文本：清掉上一组收集的分片
+            self._reset_pool()
 
     def _generate_failed(self, msg):
         self._set_busy(False)
@@ -838,19 +922,36 @@ class SquareApp:
             messagebox.showerror("无法读取剪贴板", str(e), parent=self.root)
 
 
-def run():
-    # 必须在创建 Tk 之前开启「每显示器 DPI 感知 V2」，
-    # 这样窗口坐标、鼠标事件与屏幕物理像素 1:1，区域截图不会错位/只截主屏
-    try:
-        u = ctypes.windll.user32
-        u.SetProcessDpiAwarenessContext.argtypes = [ctypes.c_void_p]
-        if not u.SetProcessDpiAwarenessContext(ctypes.c_void_p(-4)):
-            raise OSError("SetProcessDpiAwarenessContext failed")
-    except Exception:
+def _install_callback_error_log():
+    """未捕获的 Tk 回调异常写进 %TEMP%\\square-error.log
+
+    打包成 windowed exe 后 sys.stderr 是 None，Tk 默认只在 stderr 打
+    traceback，等于异常凭空消失；落到文件里才能在真机复现后回溯。
+    只有真出错时才创建/追加这个文件，正常运行不写任何东西。
+    """
+    path = os.path.join(tempfile.gettempdir(), "square-error.log")
+
+    def report(_root, exc_type, exc_value, exc_tb):
+        # Tk 通过实例调用（root.report_callback_exception(...)），
+        # 故第一个参数是 Tk 实例本身，不能用三参数签名
         try:
-            ctypes.windll.shcore.SetProcessDpiAwareness(2)
+            with open(path, "a", encoding="utf-8") as f:
+                f.write("\n===== %s =====\n"
+                        % time.strftime("%Y-%m-%d %H:%M:%S"))
+                traceback.print_exception(exc_type, exc_value, exc_tb, file=f)
         except Exception:
             pass
+
+    tk.Tk.report_callback_exception = report
+
+
+def run():
+    # 必须在创建 Tk 之前开启 DPI 感知：Win10 1703+ 走 Per-Monitor V2，
+    # Win8.1 走 shcore，Win7 回退 SetProcessDPIAware（见 gui/dpi.py）。
+    # 目的是窗口坐标、鼠标事件与屏幕物理像素 1:1，区域截图不错位/不只截主屏
+    apply_dpi_awareness()
+    # Win7 没有 shcore.dll，CTk 创建窗口时会直接抛 OSError，先替它兜底
+    patch_ctk_scaling()
 
     ctk.set_appearance_mode("light")
     ctk.set_default_color_theme("blue")
@@ -862,6 +963,7 @@ def run():
     except Exception:
         pass
 
+    _install_callback_error_log()
     root = ctk.CTk()
     # 在窗口首次显示前设图标，否则任务栏会缓存 python 默认图标
     set_window_icon(root)

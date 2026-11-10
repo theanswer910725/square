@@ -10,6 +10,7 @@ dist/
 
 # 虚拟环境
 .venv/
+.venv-win7/
 venv/
 env/
 
